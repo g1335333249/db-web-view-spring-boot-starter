@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DB Web View</title>
+  <link rel="stylesheet" href="app.css">
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <section id="login" class="login-screen">
+    <form id="login-form" class="login-card">
+      <div class="brand-mark">DB</div>
+      <h1>DB Web View</h1>
+      <p>登录后管理应用已连接的数据库</p>
+      <label>账号<input id="username" autocomplete="username" required></label>
+      <label>密码<input id="password" type="password" autocomplete="current-password" required></label>
+      <button type="submit" class="primary">登录</button>
+      <div id="login-error" class="error" role="alert"></div>
+    </form>
+  </section>
+  <div id="app" class="app hidden">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark small">DB</span><strong>DB Web View</strong></div>
+      <div class="top-actions"><span class="top-caption">数据库管理</span><button id="logout" class="text-button">退出登录</button></div>
+    </header>
+    <div class="workspace">
+      <aside class="sidebar">
+        <label class="field-label" for="source">数据源</label>
+        <select id="source"></select>
+        <div class="sidebar-heading"><span>数据表</span><button id="refresh-tables" title="刷新数据表">↻</button></div>
+        <input id="table-search" class="search" placeholder="搜索表名" aria-label="搜索表名">
+        <nav id="table-list" aria-label="数据表"></nav>
+      </aside>
+      <main class="content">
+        <div class="content-header">
+          <div><div id="breadcrumb" class="eyebrow">请选择数据表</div><h2 id="table-title">选择左侧数据表</h2></div>
+          <div class="toolbar"><button id="refresh" disabled>刷新</button><button id="add" class="primary" disabled>新增记录</button></div>
+        </div>
+        <div id="table-meta" class="table-meta"></div>
+        <div class="grid-wrap"><table id="data-grid"><thead></thead><tbody></tbody></table><div id="empty" class="empty">选择一张表开始浏览</div></div>
+        <footer class="pagination"><span id="page-info"></span><div><button id="prev" disabled>上一页</button><button id="next" disabled>下一页</button></div></footer>
+      </main>
+    </div>
+  </div>
+  <dialog id="editor">
+    <form id="editor-form" method="dialog">
+      <div class="dialog-head"><h3 id="editor-title">编辑记录</h3><button type="button" id="close-editor" aria-label="关闭">×</button></div>
+      <div id="editor-fields" class="fields"></div>
+      <div class="dialog-actions"><button type="button" id="cancel-editor">取消</button><button type="submit" class="primary">保存</button></div>
+    </form>
+  </dialog>
+  <div id="toast" class="toast hidden" role="status"></div>
+</body>
+</html>
