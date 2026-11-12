@@ -1,4 +1,4 @@
-package io.github.guanpeng.dbwebview;
+package io.github.g1335333249.dbwebview;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.context.support.StaticApplicationContext;
@@ -23,7 +23,7 @@ class SqlConsoleServiceTest {
         context.getBeanFactory().registerSingleton("limited", dataSource);
         DbWebViewProperties properties = new DbWebViewProperties();
         properties.setSqlMaxRows(1);
-        SqlConsoleService service = new SqlConsoleService(new DataSourceRegistry(context, new MockEnvironment()), properties);
+        SqlConsoleService service = new SqlConsoleService(new DataSourceRegistry(context, new MockEnvironment(), new DbWebViewProperties()), properties);
 
         Map<String, Object> result = service.execute("limited", "SELECT ID FROM T ORDER BY ID");
         assertEquals("resultSet", result.get("kind"));

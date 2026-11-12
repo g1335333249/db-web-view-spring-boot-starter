@@ -1,4 +1,4 @@
-package io.github.guanpeng.dbwebview;
+package io.github.g1335333249.dbwebview;
 
 import org.springframework.boot.context.properties.bind.Bindable;
 import org.springframework.boot.context.properties.bind.Binder;
@@ -19,11 +19,13 @@ public class DataSourceRegistry {
     private static final String DYNAMIC_CLASS = "com.baomidou.dynamic.datasource.DynamicRoutingDataSource";
     private static final String HOLDER_CLASS = "com.baomidou.dynamic.datasource.toolkit.DynamicDataSourceContextHolder";
     private final ApplicationContext context;
+    private final DbWebViewProperties properties;
     private final Environment environment;
 
-    public DataSourceRegistry(ApplicationContext context, Environment environment) {
+    public DataSourceRegistry(ApplicationContext context, Environment environment, DbWebViewProperties properties) {
         this.context = context;
         this.environment = environment;
+        this.properties = properties;
     }
 
     public Map<String, DataSource> list() {
@@ -39,6 +41,7 @@ public class DataSourceRegistry {
             if (children.isEmpty()) result.put(bean.getKey(), source);
             else result.putAll(children);
         }
+        if (!properties.getAllowedSources().isEmpty()) result.keySet().retainAll(properties.getAllowedSources());
         return Collections.unmodifiableMap(result);
     }
 

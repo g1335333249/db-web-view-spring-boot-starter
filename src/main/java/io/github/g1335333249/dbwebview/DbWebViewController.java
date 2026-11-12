@@ -1,4 +1,4 @@
-package io.github.guanpeng.dbwebview;
+package io.github.g1335333249.dbwebview;
 
 import org.springframework.core.io.ClassPathResource;
 import org.slf4j.Logger;
@@ -17,6 +17,8 @@ import java.util.Base64;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.List;
+import java.util.ArrayList;
 
 @RestController
 @RequestMapping("/db-web-view")
@@ -26,6 +28,7 @@ public class DbWebViewController {
     private final SqlConsoleService sqlService;
     private final DbWebViewProperties properties;
     private final SecureRandom random = new SecureRandom();
+    private final List<Map<String, Object>> history = new ArrayList<>();
 
     public DbWebViewController(DatabaseService service, SqlConsoleService sqlService, DbWebViewProperties properties) {
         this.service = service;
@@ -91,6 +94,13 @@ public class DbWebViewController {
         return Collections.singletonMap("ok", true);
     }
 
+    @GetMapping("/api/settings")
+    public Map<String, Object> settings() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("readOnly", properties.isReadOnly()); result.put("sqlEnabled", sqlAvailable());
+        return result;
+    }
+
     @GetMapping("/api/sources")
     public Map<String, Object> sources() { return Collections.singletonMap("sources", service.sources()); }
 
@@ -102,8 +112,42 @@ public class DbWebViewController {
     @GetMapping("/api/rows")
     public Map<String, Object> rows(@RequestParam String source, @RequestParam String namespace,
                                     @RequestParam String table, @RequestParam(defaultValue = "0") int page,
-                                    @RequestParam(defaultValue = "-1") int size) throws SQLException {
-        return service.rows(source, namespace, table, page, size);
+                                    @RequestParam(defaultValue = "-1") int size,
+                                    @RequestParam(required = false) String sort,
+                                    @RequestParam(defaultValue = "false") boolean descending,
+                                    @RequestParam(required = false) String filters) throws SQLException {
+        return service.rows(source, namespace, table, page, size, parseFilters(filters), sort, descending);
+    }
+
+    @GetMapping("/api/structure")
+    public Map<String, Object> structure(@RequestParam String source, @RequestParam String namespace,
+                                          @RequestParam String table) throws SQLException {
+        return service.structure(source, namespace, table);
+    }
+
+    @GetMapping(value = "/api/export", produces = "text/csv;charset=UTF-8")
+    public ResponseEntity<byte[]> export(@RequestParam String source, @RequestParam String namespace,
+                                         @RequestParam String table, @RequestParam(required = false) String sort,
+                                         @RequestParam(defaultValue = "false") boolean descending,
+                                         @RequestParam(required = false) String filters) throws SQLException {
+        String csv = service.exportCsv(source, namespace, table, parseFilters(filters), sort, descending);
+        return ResponseEntity.ok().header("Content-Disposition", "attachment; filename=table.csv")
+                .header("Cache-Control", "no-store")
+                .body(csv.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private Map<String, String> parseFilters(String raw) {
+        if (raw == null || raw.isEmpty()) return Collections.emptyMap();
+        try {
+            com.fasterxml.jackson.databind.JsonNode node = new com.fasterxml.jackson.databind.ObjectMapper().readTree(raw);
+            if (!node.isObject() || node.size() > 20) throw new IllegalArgumentException("筛选格式错误");
+            Map<String, String> result = new LinkedHashMap<>();
+            node.fields().forEachRemaining(entry -> {
+                if (!entry.getValue().isTextual()) throw new IllegalArgumentException("筛选值必须为文本");
+                result.put(entry.getKey(), entry.getValue().asText());
+            });
+            return result;
+        } catch (java.io.IOException ex) { throw new IllegalArgumentException("筛选格式错误", ex); }
     }
 
     @PostMapping("/api/rows")
@@ -128,11 +172,51 @@ public class DbWebViewController {
     }
 
     @PostMapping("/api/sql")
-    public Map<String, Object> executeSql(@RequestBody SqlRequest request) throws SQLException {
-        Map<String, Object> result = sqlService.execute(request.source, request.sql);
-        log.info("DB Web View SQL source={} kind={} affected={} returned={}", request.source,
-                result.get("kind"), result.get("affected"), result.get("rowCount"));
-        return result;
+    public Map<String, Object> executeSql(@RequestBody SqlRequest request, HttpServletRequest http) throws SQLException {
+        if (!sqlAvailable()) throw new IllegalArgumentException("SQL 控制台已关闭（配置表白名单时不可使用）");
+        long started = System.nanoTime();
+        try {
+            Map<String, Object> result = sqlService.execute(request.source, request.sql);
+            recordSql(request, http, result, null, (System.nanoTime() - started) / 1_000_000);
+            return result;
+        } catch (SQLException | RuntimeException ex) {
+            recordSql(request, http, null, auditError(ex), (System.nanoTime() - started) / 1_000_000);
+            throw ex;
+        }
+    }
+
+    @GetMapping("/api/sql/history")
+    public synchronized Map<String, Object> sqlHistory() {
+        if (!sqlAvailable()) throw new IllegalArgumentException("SQL 控制台已关闭（配置表白名单时不可使用）");
+        return Collections.singletonMap("history", new ArrayList<>(history));
+    }
+
+    private String auditError(Exception ex) {
+        if (ex instanceof SQLException) {
+            SQLException sql = (SQLException) ex;
+            return "SQLState=" + sql.getSQLState() + " code=" + sql.getErrorCode();
+        }
+        return ex.getMessage();
+    }
+
+    private boolean sqlAvailable() {
+        return properties.isSqlEnabled() && (properties.getAllowedTables() == null || properties.getAllowedTables().isEmpty());
+    }
+
+    private synchronized void recordSql(SqlRequest request, HttpServletRequest http, Map<String, Object> result,
+                                        String error, long elapsed) {
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("time", java.time.Instant.now().toString()); item.put("source", request.source);
+        item.put("ip", http.getRemoteAddr()); item.put("elapsedMs", elapsed);
+        item.put("kind", result == null ? "error" : result.get("kind"));
+        item.put("affected", result == null ? null : result.get("affected"));
+        item.put("rowCount", result == null ? null : result.get("rowCount"));
+        item.put("error", error);
+        if (properties.isSaveSqlText()) item.put("sql", request.sql);
+        history.add(0, item);
+        while (history.size() > Math.max(1, Math.min(1000, properties.getHistorySize()))) history.remove(history.size() - 1);
+        log.info("DB Web View SQL source={} ip={} kind={} affected={} returned={} elapsedMs={} error={}",
+                request.source, http.getRemoteAddr(), item.get("kind"), item.get("affected"), item.get("rowCount"), elapsed, error);
     }
 
     private void audit(String action, RowRequest request, int count) {

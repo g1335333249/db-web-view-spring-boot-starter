@@ -1,4 +1,4 @@
-package io.github.guanpeng.dbwebview;
+package io.github.g1335333249.dbwebview;
 
 /** Recognizes semicolons outside SQL strings and comments. This is a UX guard, not an SQL permission system. */
 final class SingleStatementSql {

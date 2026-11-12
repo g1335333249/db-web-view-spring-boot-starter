@@ -1,2 +1,2 @@
 org.springframework.boot.autoconfigure.EnableAutoConfiguration=\
-io.github.guanpeng.dbwebview.DbWebViewAutoConfiguration
+io.github.g1335333249.dbwebview.DbWebViewAutoConfiguration

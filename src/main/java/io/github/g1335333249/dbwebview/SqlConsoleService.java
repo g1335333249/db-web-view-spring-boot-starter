@@ -1,4 +1,4 @@
-package io.github.guanpeng.dbwebview;
+package io.github.g1335333249.dbwebview;
 
 import java.sql.Blob;
 import java.sql.Clob;
@@ -25,11 +25,14 @@ public class SqlConsoleService {
 
     public Map<String, Object> execute(String source, String input) throws SQLException {
         String sql = SingleStatementSql.normalize(input);
+        if (properties.isReadOnly() && !sql.matches("(?is)^\\s*SELECT\\b.*"))
+            throw new IllegalArgumentException("只读模式仅允许 SELECT；请同时使用只读数据库账号");
         int maxRows = Math.max(1, Math.min(properties.getSqlMaxRows(), 1000));
         int timeout = Math.max(1, Math.min(properties.getSqlTimeoutSeconds(), 300));
         long started = System.nanoTime();
-        try (Connection connection = registry.require(source).getConnection();
-             Statement statement = connection.createStatement()) {
+        try (Connection connection = registry.require(source).getConnection()) {
+            if (properties.isReadOnly()) connection.setReadOnly(true);
+            try (Statement statement = connection.createStatement()) {
             statement.setQueryTimeout(timeout);
             statement.setMaxRows(maxRows + 1);
             boolean hasResult = statement.execute(sql);
@@ -59,6 +62,7 @@ public class SqlConsoleService {
             }
             result.put("elapsedMs", (System.nanoTime() - started) / 1_000_000);
             return result;
+            }
         }
     }
 

@@ -1,4 +1,4 @@
-package io.github.guanpeng.dbwebview;
+package io.github.g1335333249.dbwebview;
 
 import javax.sql.DataSource;
 import java.math.BigDecimal;
@@ -32,7 +32,7 @@ public class DatabaseService {
                     table.put("namespace", namespace);
                     table.put("name", name);
                     table.put("type", rs.getString("TABLE_TYPE"));
-                    result.add(table);
+                    if (allowedTable(namespace, name)) result.add(table);
                 }
             }
             result.sort(Comparator.comparing((Map<String, String> t) -> t.get("namespace"))
@@ -42,6 +42,11 @@ public class DatabaseService {
     }
 
     public Map<String, Object> rows(String source, String namespace, String tableName, int page, int size) throws SQLException {
+        return rows(source, namespace, tableName, page, size, Collections.emptyMap(), null, false);
+    }
+
+    public Map<String, Object> rows(String source, String namespace, String tableName, int page, int size,
+                                    Map<String, String> filters, String sort, boolean descending) throws SQLException {
         if (page < 0) throw new IllegalArgumentException("页码不能小于 0");
         int max = Math.max(1, Math.min(1000, properties.getMaxPageSize()));
         int actualSize = Math.max(1, Math.min(size <= 0 ? properties.getPageSize() : size, max));
@@ -50,17 +55,30 @@ public class DatabaseService {
             Table table = resolve(connection, namespace, tableName);
             List<Map<String, Object>> records = new ArrayList<>();
             StringBuilder sql = new StringBuilder("SELECT * FROM ").append(table.qualifiedName);
-            if (!table.primaryKeys.isEmpty()) {
-                sql.append(" ORDER BY ");
-                for (int i = 0; i < table.primaryKeys.size(); i++) {
-                    if (i > 0) sql.append(',');
-                    sql.append(quote(connection, table.primaryKeys.get(i)));
+            Map<String, String> checkedFilters = filters == null ? Collections.emptyMap() : filters;
+            if (checkedFilters.size() > 20) throw new IllegalArgumentException("筛选字段过多");
+            if (!checkedFilters.isEmpty()) {
+                StringJoiner terms = new StringJoiner(" AND ");
+                for (String column : checkedFilters.keySet()) {
+                    Column definition = table.columns.get(column);
+                    if (definition == null || definition.binary) throw new IllegalArgumentException("不可筛选字段: " + column);
+                    terms.add(quote(connection, column) + " = ?");
                 }
+                sql.append(" WHERE ").append(terms);
             }
+            if (sort != null && !sort.isEmpty() && !table.columns.containsKey(sort))
+                throw new IllegalArgumentException("未知排序字段: " + sort);
+            List<String> order = new ArrayList<>();
+            if (sort != null && !sort.isEmpty()) order.add(quote(connection, sort) + (descending ? " DESC" : " ASC"));
+            for (String key : table.primaryKeys) if (!key.equals(sort)) order.add(quote(connection, key));
+            if (!order.isEmpty()) sql.append(" ORDER BY ").append(String.join(", ", order));
             sql.append(" LIMIT ? OFFSET ?");
             try (PreparedStatement statement = connection.prepareStatement(sql.toString())) {
-                statement.setInt(1, actualSize + 1);
-                statement.setInt(2, page * actualSize);
+                int parameter = 1;
+                for (Map.Entry<String, String> entry : checkedFilters.entrySet())
+                    statement.setObject(parameter++, convert(entry.getValue(), table.columns.get(entry.getKey()).jdbcType));
+                statement.setInt(parameter++, actualSize + 1);
+                statement.setInt(parameter, page * actualSize);
                 statement.setQueryTimeout(30);
                 try (ResultSet rs = statement.executeQuery()) {
                     while (rs.next()) {
@@ -77,8 +95,8 @@ public class DatabaseService {
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("columns", table.columnDescriptions());
             result.put("primaryKeys", table.primaryKeys);
-            result.put("readOnly", table.readOnly);
-            result.put("canInsert", !table.view);
+            result.put("readOnly", table.readOnly || properties.isReadOnly());
+            result.put("canInsert", !table.view && !properties.isReadOnly());
             result.put("rows", records);
             result.put("page", page);
             result.put("size", actualSize);
@@ -88,6 +106,7 @@ public class DatabaseService {
     }
 
     public int insert(String source, String namespace, String tableName, Map<String, Object> values) throws SQLException {
+        requireWriteEnabled();
         try (Connection connection = registry.require(source).getConnection()) {
             Table table = resolve(connection, namespace, tableName);
             if (table.view) throw new IllegalArgumentException("视图不允许新增");
@@ -103,6 +122,7 @@ public class DatabaseService {
 
     public int update(String source, String namespace, String tableName, Map<String, Object> keys,
                       Map<String, Object> values) throws SQLException {
+        requireWriteEnabled();
         try (Connection connection = registry.require(source).getConnection()) {
             Table table = resolve(connection, namespace, tableName);
             requireWritable(table);
@@ -119,6 +139,7 @@ public class DatabaseService {
     }
 
     public int delete(String source, String namespace, String tableName, Map<String, Object> keys) throws SQLException {
+        requireWriteEnabled();
         try (Connection connection = registry.require(source).getConnection()) {
             Table table = resolve(connection, namespace, tableName);
             requireWritable(table);
@@ -126,6 +147,83 @@ public class DatabaseService {
             String sql = "DELETE FROM " + table.qualifiedName + " WHERE " + where(connection, table);
             return execute(connection, sql, checked, table);
         }
+    }
+
+    private void requireWriteEnabled() {
+        if (properties.isReadOnly()) throw new IllegalArgumentException("管理页面处于只读模式");
+    }
+
+    private boolean allowedTable(String namespace, String name) {
+        List<String> allowed = properties.getAllowedTables();
+        return allowed == null || allowed.isEmpty() || allowed.contains(namespace + "." + name);
+    }
+
+    public Map<String, Object> structure(String source, String namespace, String tableName) throws SQLException {
+        try (Connection connection = registry.require(source).getConnection()) {
+            Table table = resolve(connection, namespace, tableName);
+            DatabaseMetaData metadata = connection.getMetaData();
+            String catalog = "mysql".equals(dialect(metadata)) ? namespace : connection.getCatalog();
+            String schema = "mysql".equals(dialect(metadata)) ? null : namespace;
+            List<Map<String, Object>> indexes = new ArrayList<>();
+            try (ResultSet rs = metadata.getIndexInfo(catalog, schema, tableName, false, false)) {
+                while (rs.next()) {
+                    String column = rs.getString("COLUMN_NAME");
+                    if (column == null) continue;
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("name", rs.getString("INDEX_NAME")); item.put("column", column);
+                    item.put("unique", !rs.getBoolean("NON_UNIQUE")); indexes.add(item);
+                }
+            }
+            List<Map<String, Object>> foreignKeys = new ArrayList<>();
+            try (ResultSet rs = metadata.getImportedKeys(catalog, schema, tableName)) {
+                while (rs.next()) {
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("name", rs.getString("FK_NAME"));
+                    item.put("column", rs.getString("FKCOLUMN_NAME"));
+                    item.put("reference", rs.getString("PKTABLE_SCHEM") + "." + rs.getString("PKTABLE_NAME") + "." + rs.getString("PKCOLUMN_NAME"));
+                    foreignKeys.add(item);
+                }
+            }
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("columns", table.columnDescriptions()); result.put("primaryKeys", table.primaryKeys);
+            result.put("indexes", indexes); result.put("foreignKeys", foreignKeys);
+            return result;
+        }
+    }
+
+    public String exportCsv(String source, String namespace, String tableName, Map<String, String> filters,
+                            String sort, boolean descending) throws SQLException {
+        int limit = Math.max(1, Math.min(properties.getExportMaxRows(), 100000));
+        StringBuilder csv = new StringBuilder("\uFEFF");
+        int page = 0, count = 0;
+        while (count < limit) {
+            int size = Math.min(500, limit);
+            Map<String, Object> result = rows(source, namespace, tableName, page++, size, filters, sort, descending);
+            @SuppressWarnings("unchecked") List<Map<String, Object>> columns = (List<Map<String, Object>>) result.get("columns");
+            @SuppressWarnings("unchecked") List<Map<String, Object>> records = (List<Map<String, Object>>) result.get("rows");
+            if (count == 0) {
+                List<String> names = new ArrayList<>();
+                for (Map<String, Object> column : columns) names.add(csvCell(column.get("name")));
+                csv.append(String.join(",", names)).append("\r\n");
+            }
+            for (Map<String, Object> record : records) {
+                if (count >= limit) break;
+                List<String> cells = new ArrayList<>();
+                for (Map<String, Object> column : columns) cells.add(csvCell(record.get(column.get("name"))));
+                csv.append(String.join(",", cells)).append("\r\n");
+                count++;
+            }
+            if (!(Boolean) result.get("hasNext") || records.isEmpty()) break;
+        }
+        return csv.toString();
+    }
+
+    private String csvCell(Object value) {
+        if (value == null) return "";
+        String text = String.valueOf(value);
+        if (value instanceof String && !text.trim().isEmpty()
+                && "=+-@".indexOf(text.trim().charAt(0)) >= 0) text = "'" + text;
+        return "\"" + text.replace("\"", "\"\"") + "\"";
     }
 
     private int execute(Connection connection, String sql, Map<String, Object> values, Table table) throws SQLException {
@@ -211,7 +309,7 @@ public class DatabaseService {
                 }
             }
         }
-        if (type == null || isSystem(namespace)) throw new IllegalArgumentException("表不存在或不可访问");
+        if (type == null || isSystem(namespace) || !allowedTable(namespace, name)) throw new IllegalArgumentException("表不存在或不可访问");
         LinkedHashMap<String, Column> columns = new LinkedHashMap<>();
         try (ResultSet rs = metadata.getColumns(catalog, schema, name, null)) {
             while (rs.next()) {

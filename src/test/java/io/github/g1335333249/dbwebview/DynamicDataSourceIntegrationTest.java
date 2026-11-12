@@ -1,18 +1,14 @@
-package io.github.guanpeng.dbwebview;
+package io.github.g1335333249.dbwebview;
 
-import com.baomidou.dynamic.datasource.DynamicRoutingDataSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Bean;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
 
-import javax.sql.DataSource;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -32,13 +28,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class DynamicDataSourceIntegrationTest {
     @SpringBootConfiguration
     @EnableAutoConfiguration
-    static class App {
-        @Bean DataSource dataSource() {
-            DynamicRoutingDataSource routing = new DynamicRoutingDataSource();
-            routing.add("szqdpt", new DriverManagerDataSource("jdbc:h2:mem:szqdpt_api;DB_CLOSE_DELAY=-1", "sa", ""));
-            return routing;
-        }
-    }
+    static class App { }
 
     @Autowired MockMvc mvc;
 

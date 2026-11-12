@@ -1,6 +1,7 @@
-package io.github.guanpeng.dbwebview;
+package io.github.g1335333249.dbwebview;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.ApplicationContext;
@@ -13,11 +14,12 @@ import javax.sql.DataSource;
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 @ConditionalOnClass(DataSource.class)
+@ConditionalOnProperty(prefix = "db-web-view", name = "enabled", havingValue = "true", matchIfMissing = true)
 @EnableConfigurationProperties(DbWebViewProperties.class)
 public class DbWebViewAutoConfiguration {
     @Bean
-    public DataSourceRegistry dbWebViewDataSourceRegistry(ApplicationContext context, Environment environment) {
-        return new DataSourceRegistry(context, environment);
+    public DataSourceRegistry dbWebViewDataSourceRegistry(ApplicationContext context, Environment environment, DbWebViewProperties properties) {
+        return new DataSourceRegistry(context, environment, properties);
     }
 
     @Bean

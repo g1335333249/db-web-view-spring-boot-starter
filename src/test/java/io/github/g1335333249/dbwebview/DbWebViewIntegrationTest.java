@@ -1,4 +1,4 @@
-package io.github.guanpeng.dbwebview;
+package io.github.g1335333249.dbwebview;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -21,6 +21,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest(classes = DbWebViewIntegrationTest.App.class, properties = {
         "spring.datasource.url=jdbc:h2:mem:dbwv;DB_CLOSE_DELAY=-1",
         "spring.datasource.username=sa",
+        "spring.autoconfigure.exclude=com.baomidou.dynamic.datasource.spring.boot.autoconfigure.DynamicDataSourceAutoConfiguration",
         "db-web-view.username=admin",
         "db-web-view.password=secret"
 })
@@ -110,4 +111,39 @@ class DbWebViewIntegrationTest {
                 .andExpect(status().isOk());
         assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM ITEMS WHERE ID=2", Integer.class));
     }
+    @Test
+    void filterSortStructureExportAndHistory() throws Exception {
+        jdbc.update("INSERT INTO ITEMS (ID, NAME) VALUES (?, ?)", 2, "second");
+        MvcResult login = mvc.perform(post("/db-web-view/api/login").contentType("application/json")
+                .content("{\"username\":\"admin\",\"password\":\"secret\"}"))
+                .andExpect(status().isOk()).andReturn();
+        MockHttpSession session = (MockHttpSession) login.getRequest().getSession(false);
+        String csrf = mapper.readTree(login.getResponse().getContentAsString()).get("csrf").asText();
+        String source = mapper.readTree(mvc.perform(get("/db-web-view/api/sources").session(session))
+                .andReturn().getResponse().getContentAsString()).get("sources").get(0).asText();
+        JsonNode filtered = mapper.readTree(mvc.perform(get("/db-web-view/api/rows").session(session)
+                .param("source", source).param("namespace", "PUBLIC").param("table", "ITEMS")
+                .param("filters", "{\"NAME\":\"second\"}").param("sort", "ID").param("descending", "true"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        assertEquals(1, filtered.get("rows").size());
+        assertEquals(2, filtered.get("rows").get(0).get("ID").asInt());
+        mvc.perform(get("/db-web-view/api/rows").session(session).param("source", source)
+                .param("namespace", "PUBLIC").param("table", "ITEMS").param("sort", "MISSING"))
+                .andExpect(status().isBadRequest());
+        JsonNode structure = mapper.readTree(mvc.perform(get("/db-web-view/api/structure").session(session)
+                .param("source", source).param("namespace", "PUBLIC").param("table", "ITEMS"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        assertEquals("ID", structure.get("primaryKeys").get(0).asText());
+        mvc.perform(get("/db-web-view/api/export").session(session).param("source", source)
+                .param("namespace", "PUBLIC").param("table", "ITEMS").param("filters", "{\"NAME\":\"second\"}"))
+                .andExpect(status().isOk()).andExpect(content().string(org.hamcrest.Matchers.containsString("second")));
+        mvc.perform(post("/db-web-view/api/sql").session(session).header("X-DB-Web-View-CSRF", csrf)
+                .contentType("application/json").content("{\"source\":\"" + source + "\",\"sql\":\"SELECT COUNT(*) FROM ITEMS\"}"))
+                .andExpect(status().isOk());
+        JsonNode history = mapper.readTree(mvc.perform(get("/db-web-view/api/sql/history").session(session))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        assertTrue(history.get("history").size() > 0);
+        assertFalse(history.get("history").get(0).has("sql"));
+    }
+
 }

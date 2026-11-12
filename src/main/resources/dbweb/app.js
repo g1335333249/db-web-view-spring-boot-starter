@@ -1,6 +1,6 @@
 (() => {
   const $ = id => document.getElementById(id);
-  const state = {csrf:null,source:null,table:null,tables:[],page:0,data:null,view:'table'};
+  const state = {csrf:null,source:null,table:null,tables:[],page:0,data:null,view:'table',filters:{},sort:'',descending:false,settings:{}};
   const base = location.pathname.replace(/\/$/, '') + '/api';
   const qs = data => '?' + new URLSearchParams(data).toString();
   async function api(path, options={}) {
@@ -31,15 +31,22 @@
       $('tab-' + name).classList.toggle('active', name === view);
       $('tab-' + name).setAttribute('aria-selected', String(name === view));
     }
-    if (view === 'sql') $('sql-input').focus();
+    if (view === 'sql') { $('sql-input').focus(); loadHistory(); }
   }
   async function start() {
     try {
       state.csrf = (await api('/session')).csrf;
     } catch (_) { showLogin(); return; }
     showApp();
-    try { await loadSources(); }
+    try { await loadSettings(); await loadSources(); }
     catch (error) { $('table-list').textContent = '数据源加载失败，点击刷新重试'; toast(error.message); }
+  }
+  async function loadSettings() {
+    state.settings = await api('/settings');
+    $('tab-sql').classList.toggle('hidden', !state.settings.sqlEnabled);
+    $('sql-panel').classList.toggle('hidden', !state.settings.sqlEnabled);
+    $('run-sql').disabled = !state.settings.sqlEnabled;
+    if (state.settings.readOnly) $('sql-input').placeholder = '只读模式：仅允许 SELECT';
   }
   async function loadSources() {
     const list = (await api('/sources')).sources;
@@ -64,25 +71,26 @@
       if (group !== t.namespace) { group = t.namespace; const heading = document.createElement('div'); heading.className = 'group-title'; heading.textContent = group; nav.append(heading); }
       const button = document.createElement('button'); button.className = 'table-link' + (state.table && state.table.namespace === t.namespace && state.table.name === t.name ? ' active' : '');
       button.textContent = t.name + (t.type === 'VIEW' ? ' · 视图' : '');
-      button.onclick = () => { state.table = t; state.page = 0; switchView('table'); renderTables(); loadRows().catch(e => toast(e.message)); };
+      button.onclick = () => { state.table = t; state.page = 0; state.filters = {}; state.sort = ''; state.descending = false; $('filter-value').value = ''; $('descending').checked = false; $('structure-panel').classList.add('hidden'); switchView('table'); renderTables(); loadRows().catch(e => toast(e.message)); };
       nav.append(button);
     });
     if (!nav.children.length) nav.textContent = '没有匹配的数据表';
   }
   function clearGrid() {
     $('data-grid').querySelector('thead').replaceChildren(); $('data-grid').querySelector('tbody').replaceChildren();
-    $('empty').classList.remove('hidden'); $('refresh').disabled = true; $('add').disabled = true;
+    $('empty').classList.remove('hidden'); $('refresh').disabled = true; $('add').disabled = true; $('structure').disabled = true; $('export').disabled = true;
     $('table-title').textContent = '选择左侧数据表'; $('breadcrumb').textContent = '请选择数据表'; $('table-meta').textContent = '';
     $('page-info').textContent = ''; $('prev').disabled = true; $('next').disabled = true;
   }
   async function loadRows() {
     const t = state.table;
-    const data = await api('/rows' + qs({source:state.source,namespace:t.namespace,table:t.name,page:state.page}));
+    const data = await api('/rows' + qs({source:state.source,namespace:t.namespace,table:t.name,page:state.page,filters:JSON.stringify(state.filters),sort:state.sort,descending:state.descending}));
     state.data = data;
     $('table-title').textContent = t.name;
     $('breadcrumb').textContent = `${state.source} / ${t.namespace}`;
     $('table-meta').textContent = `${data.columns.length} 个字段 · ${data.primaryKeys.length ? '主键: ' + data.primaryKeys.join(', ') : '无主键'}${data.readOnly ? ' · 只读' : ''}`;
-    $('refresh').disabled = false; $('add').disabled = !data.canInsert;
+    $('refresh').disabled = false; $('add').disabled = !data.canInsert; $('structure').disabled = false; $('export').disabled = false;
+    for (const id of ['filter-column','sort-column']) { const select = $(id), previous = select.value; select.replaceChildren(); if (id === 'sort-column') select.append(new Option('默认顺序','')); data.columns.filter(c => !c.binary).forEach(c => select.append(new Option(c.name,c.name))); select.value = id === 'sort-column' ? state.sort : (previous || data.columns[0]?.name || ''); }
     const head = $('data-grid').querySelector('thead'); head.replaceChildren();
     const hr = document.createElement('tr');
     data.columns.forEach(c => { const th = document.createElement('th'); th.textContent = c.name; th.title = c.type; hr.append(th); });
@@ -153,6 +161,13 @@
       toast(`已删除，影响 ${result.affected} 行`); await loadRows();
     } catch (error) { toast(error.message); }
   }
+  async function loadHistory() {
+    try {
+      const list=(await api('/sql/history')).history, panel=$('sql-history'); panel.replaceChildren();
+      list.forEach(item=>{ const row=document.createElement('div'); row.textContent=`${item.time} · ${item.source} · ${item.kind} · ${item.elapsedMs}ms${item.error ? ' · '+item.error : ''}${item.sql ? ' · '+item.sql : ''}`; panel.append(row); });
+      if (!list.length) panel.textContent='暂无记录';
+    } catch(e) { toast(e.message); }
+  }
   async function runSql() {
     if ($('run-sql').disabled) return;
     if (!state.source) { toast('没有可用的数据源'); return; }
@@ -165,6 +180,7 @@
     $('sql-status').textContent = '正在执行…';
     try {
       const result = await api('/sql', {method:'POST',body:JSON.stringify({source,sql})});
+      loadHistory();
       if (source !== state.source) return;
       const head = $('sql-grid').querySelector('thead'); const body = $('sql-grid').querySelector('tbody');
       head.replaceChildren(); body.replaceChildren();
@@ -195,7 +211,7 @@
       $('password').value = ''; showApp();
     } catch (error) { $('login-error').textContent = error.message; }
     if (state.csrf) {
-      try { await loadSources(); }
+      try { await loadSettings(); await loadSources(); }
       catch (error) { $('table-list').textContent = '数据源加载失败，点击刷新重试'; toast(error.message); }
     }
   };
@@ -212,6 +228,29 @@
   };
   $('table-search').oninput = renderTables;
   $('refresh').onclick = () => loadRows().catch(e => toast(e.message));
+  $('apply-filter').onclick = () => { const column = $('filter-column').value; state.filters = column && $('filter-value').value !== '' ? {[column]:$('filter-value').value} : {}; state.page = 0; if (state.table) loadRows().catch(e => toast(e.message)); };
+  $('clear-filter').onclick = () => { state.filters = {}; $('filter-value').value = ''; state.page = 0; if (state.table) loadRows().catch(e => toast(e.message)); };
+  $('sort-column').onchange = () => { state.sort = $('sort-column').value; state.page = 0; if (state.table) loadRows().catch(e => toast(e.message)); };
+  $('descending').onchange = () => { state.descending = $('descending').checked; state.page = 0; if (state.table) loadRows().catch(e => toast(e.message)); };
+  $('structure').onclick = async () => {
+    try {
+      const t = state.table, data = await api('/structure' + qs({source:state.source,namespace:t.namespace,table:t.name}));
+      const panel = $('structure-panel'); panel.replaceChildren();
+      const add = (title, rows, fields) => { const h = document.createElement('h3'); h.textContent = title; panel.append(h); const table = document.createElement('table'); const head = document.createElement('tr'); fields.forEach(f => {const th=document.createElement('th'); th.textContent=f; head.append(th);}); table.append(head); rows.forEach(r=>{const tr=document.createElement('tr'); fields.forEach(f=>{const td=document.createElement('td'); td.textContent=String(r[f] ?? ''); tr.append(td);}); table.append(tr);}); panel.append(table); };
+      add('字段', data.columns, ['name','type','nullable','autoIncrement','generated']);
+      add('索引', data.indexes, ['name','column','unique']);
+      add('外键', data.foreignKeys, ['name','column','reference']);
+      panel.classList.toggle('hidden');
+    } catch(e) { toast(e.message); }
+  };
+  $('export').onclick = async () => {
+    try {
+      const t=state.table, response=await fetch(base+'/export'+qs({source:state.source,namespace:t.namespace,table:t.name,filters:JSON.stringify(state.filters),sort:state.sort,descending:state.descending}),{credentials:'same-origin'});
+      if (!response.ok) { const body=await response.json(); throw new Error(body.error || '导出失败'); }
+      const url=URL.createObjectURL(await response.blob()), a=document.createElement('a'); a.href=url; a.download=t.name+'.csv'; a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);
+    } catch(e) { toast(e.message); }
+  };
+  $('refresh-history').onclick = loadHistory;
   $('add').onclick = () => openEditor();
   $('prev').onclick = () => { state.page--; loadRows().catch(e => toast(e.message)); };
   $('next').onclick = () => { state.page++; loadRows().catch(e => toast(e.message)); };

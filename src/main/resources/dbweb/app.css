@@ -9,3 +9,13 @@
 .sql-actions{display:flex;align-items:center;justify-content:space-between;margin-top:11px;color:#98a2b3;font-size:12px}
 .sql-actions button{min-width:105px}
 #sql-panel .grid-wrap{min-height:150px}
+.table-controls { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:12px 0; }
+.table-controls label { display:flex; align-items:center; gap:6px; font-size:13px; color:#526078; }
+.table-controls input, .table-controls select { max-width:170px; padding:7px; border:1px solid #dce2ec; border-radius:6px; }
+.table-controls input[type=checkbox] { width:auto; }
+.structure-panel { margin:14px 0; max-height:300px; overflow:auto; border:1px solid #dce2ec; border-radius:8px; padding:12px; }
+.structure-panel h3 { margin:10px 0; font-size:15px; }
+.structure-panel table { border-collapse:collapse; width:100%; }
+.structure-panel th, .structure-panel td { text-align:left; padding:7px; border-bottom:1px solid #e8edf4; font-size:13px; }
+.history-list { max-height:220px; overflow:auto; font-size:12px; overflow-wrap:anywhere; }
+.history-list div { padding:7px; border-bottom:1px solid #e8edf4; }
