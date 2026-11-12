@@ -20,6 +20,8 @@ Java 8+，Servlet Web 应用。执行 `mvn install` 后，在应用中引入：
 db-web-view:
   username: ${DB_WEB_VIEW_USER}
   password: ${DB_WEB_VIEW_PASSWORD}
+  jwt-secret: ${DB_WEB_VIEW_JWT_SECRET}
+  jwt-ttl-seconds: 43200
   enabled: true
   read-only: false
   sql-enabled: true
@@ -32,7 +34,7 @@ db-web-view:
   save-sql-text: false
 ```
 
-访问 `http://localhost:8080/db-web-view/`。只有账号和密码都配置时页面才可用。`enabled: false` 会关闭整个 starter 的自动配置。`application-dev.yml`、`application-prod.yml` 与环境变量按 Spring Boot 的配置优先级生效，页面读取最终创建的数据源 Bean。数据库 JDBC 驱动由宿主应用提供。
+访问 `http://localhost:8080/db-web-view/`。账号、密码和 JWT 密钥都需要配置；`jwt-secret` 至少 32 字节。`enabled: false` 会关闭整个 starter 的自动配置。`application-dev.yml`、`application-prod.yml` 与环境变量按 Spring Boot 的配置优先级生效，页面读取最终创建的数据源 Bean。数据库 JDBC 驱动由宿主应用提供。
 
 多数据源应用可以继续使用原有的 `dynamic-datasource-spring-boot-starter`：
 
@@ -52,7 +54,13 @@ spring:
           password: ${REPORT_DB_PASSWORD}
 ```
 
-页面的数据源列表会出现 `master` 和 `report`。推荐使用 HTTPS、受控网络与最小权限数据库账号。若宿主应用启用了 Spring Security，需允许 `/db-web-view/**` 进入本 starter，并避免宿主 CSRF 规则拦截这些路径；本 starter 对 API 自行执行会话认证与 CSRF 校验。
+页面的数据源列表会出现 `master` 和 `report`。推荐使用 HTTPS、受控网络与最小权限数据库账号。反向代理需传递 `X-Forwarded-Proto: https`，以便认证 Cookie 带上 `Secure` 属性。若宿主应用启用了 Spring Security，需允许 `/db-web-view/**` 进入本 starter，并避免宿主 CSRF 规则拦截这些路径；本 starter 对 API 自行执行会话认证与 CSRF 校验。
+
+## Kubernetes 多 Pod 登录
+
+认证使用 HS256 签名的 JWT，存放在 `HttpOnly; SameSite=Lax` Cookie 中；页面刷新后会从 Cookie 恢复登录，不使用 `HttpSession`。所有 Pod 必须从同一个 Kubernetes Secret 获取**相同**的 `DB_WEB_VIEW_JWT_SECRET`，账号与 `jwt-ttl-seconds` 也应一致。可以用 `openssl rand -base64 48` 生成密钥。密钥轮换会使旧令牌失效，需要重新登录。
+
+令牌默认有效 12 小时，在剩余时间少于一半时由活跃请求续期，因此不会因原来的 30 分钟 Session 空闲超时而退出。长时间完全无操作、密钥更换或浏览器删除 Cookie 后仍需重新登录。退出登录会删除浏览器 Cookie；无共享状态时，已复制的旧 JWT 无法立即撤销，会在过期后失效。需要立即撤销能力时，应使用共享存储维护撤销列表。SQL 执行历史仍保存在各 Pod 内存中，跨 Pod 不共享。
 
 ## 功能与限制
 

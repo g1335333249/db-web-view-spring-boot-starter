@@ -33,13 +33,18 @@ public class DbWebViewAutoConfiguration {
     }
 
     @Bean
-    public DbWebViewController dbWebViewController(DatabaseService service, SqlConsoleService sqlService,
-                                                   DbWebViewProperties properties) {
-        return new DbWebViewController(service, sqlService, properties);
+    public JwtAuthService dbWebViewJwtAuthService(DbWebViewProperties properties) {
+        return new JwtAuthService(properties);
     }
 
     @Bean
-    public DbWebViewAuthFilter dbWebViewAuthFilter(DbWebViewProperties properties) {
-        return new DbWebViewAuthFilter(properties);
+    public DbWebViewController dbWebViewController(DatabaseService service, SqlConsoleService sqlService,
+                                                   DbWebViewProperties properties, JwtAuthService jwt) {
+        return new DbWebViewController(service, sqlService, properties, jwt);
+    }
+
+    @Bean
+    public DbWebViewAuthFilter dbWebViewAuthFilter(JwtAuthService jwt) {
+        return new DbWebViewAuthFilter(jwt);
     }
 }

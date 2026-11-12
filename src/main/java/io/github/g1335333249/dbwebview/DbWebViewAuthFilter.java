@@ -6,15 +6,13 @@ import javax.servlet.FilterChain;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
-import javax.servlet.http.HttpSession;
 import java.io.IOException;
 
 public class DbWebViewAuthFilter extends OncePerRequestFilter {
-    public static final String AUTH = DbWebViewAuthFilter.class.getName() + ".auth";
-    public static final String CSRF = DbWebViewAuthFilter.class.getName() + ".csrf";
-    private final DbWebViewProperties properties;
+    static final String CLAIMS = DbWebViewAuthFilter.class.getName() + ".claims";
+    private final JwtAuthService jwt;
 
-    public DbWebViewAuthFilter(DbWebViewProperties properties) { this.properties = properties; }
+    public DbWebViewAuthFilter(JwtAuthService jwt) { this.jwt = jwt; }
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
@@ -32,19 +30,15 @@ public class DbWebViewAuthFilter extends OncePerRequestFilter {
             chain.doFilter(request, response);
             return;
         }
-        HttpSession session = request.getSession(false);
-        if (session == null || !Boolean.TRUE.equals(session.getAttribute(AUTH))) {
-            reject(response, 401, "请先登录");
+        JwtAuthService.Claims claims = jwt.verify(request);
+        if (claims == null) { reject(response, 401, "请先登录"); return; }
+        if (!"GET".equals(request.getMethod()) && !"HEAD".equals(request.getMethod())
+                && !jwt.validCsrf(claims, request.getHeader("X-DB-Web-View-CSRF"))) {
+            reject(response, 403, "CSRF 校验失败");
             return;
         }
-        if (!"GET".equals(request.getMethod()) && !"HEAD".equals(request.getMethod())) {
-            String expected = (String) session.getAttribute(CSRF);
-            String provided = request.getHeader("X-DB-Web-View-CSRF");
-            if (expected == null || !expected.equals(provided)) {
-                reject(response, 403, "CSRF 校验失败");
-                return;
-            }
-        }
+        request.setAttribute(CLAIMS, claims);
+        if (!"/db-web-view/api/logout".equals(path)) jwt.refreshIfNeeded(request, response, claims);
         chain.doFilter(request, response);
     }
 

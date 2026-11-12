@@ -8,12 +8,10 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpSession;
+import javax.servlet.http.HttpServletResponse;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.security.SecureRandom;
 import java.sql.SQLException;
-import java.util.Base64;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -27,13 +25,14 @@ public class DbWebViewController {
     private final DatabaseService service;
     private final SqlConsoleService sqlService;
     private final DbWebViewProperties properties;
-    private final SecureRandom random = new SecureRandom();
+    private final JwtAuthService jwt;
     private final List<Map<String, Object>> history = new ArrayList<>();
 
-    public DbWebViewController(DatabaseService service, SqlConsoleService sqlService, DbWebViewProperties properties) {
+    public DbWebViewController(DatabaseService service, SqlConsoleService sqlService, DbWebViewProperties properties, JwtAuthService jwt) {
         this.service = service;
         this.sqlService = sqlService;
         this.properties = properties;
+        this.jwt = jwt;
     }
 
     @GetMapping("")
@@ -63,7 +62,7 @@ public class DbWebViewController {
     }
 
     @PostMapping("/api/login")
-    public Map<String, Object> login(@RequestBody Map<String, String> body, HttpServletRequest request) {
+    public Map<String, Object> login(@RequestBody Map<String, String> body, HttpServletRequest request, HttpServletResponse response) {
         ensureConfigured();
         if (body == null || !matches(properties.getUsername(), body.get("username"))
                 || !matches(properties.getPassword(), body.get("password"))) {
@@ -71,26 +70,18 @@ public class DbWebViewController {
             throw new UnauthorizedException("账号或密码错误");
         }
         log.info("DB Web View login succeeded from {}", request.getRemoteAddr());
-        HttpSession old = request.getSession(false);
-        if (old != null) old.invalidate();
-        HttpSession session = request.getSession(true);
-        session.setMaxInactiveInterval(30 * 60);
-        session.setAttribute(DbWebViewAuthFilter.AUTH, Boolean.TRUE);
-        byte[] bytes = new byte[32];
-        random.nextBytes(bytes);
-        String csrf = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-        session.setAttribute(DbWebViewAuthFilter.CSRF, csrf);
-        return Collections.singletonMap("csrf", csrf);
+        return Collections.singletonMap("csrf", jwt.issue(request, response));
     }
 
     @GetMapping("/api/session")
-    public Map<String, Object> session(HttpSession session) {
-        return Collections.singletonMap("csrf", session.getAttribute(DbWebViewAuthFilter.CSRF));
+    public Map<String, Object> session(HttpServletRequest request) {
+        JwtAuthService.Claims claims = (JwtAuthService.Claims) request.getAttribute(DbWebViewAuthFilter.CLAIMS);
+        return Collections.singletonMap("csrf", jwt.csrf(claims));
     }
 
     @PostMapping("/api/logout")
-    public Map<String, Object> logout(HttpSession session) {
-        session.invalidate();
+    public Map<String, Object> logout(HttpServletRequest request, HttpServletResponse response) {
+        jwt.clear(request, response);
         return Collections.singletonMap("ok", true);
     }
 

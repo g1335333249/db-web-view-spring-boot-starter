@@ -12,6 +12,8 @@ public class DbWebViewProperties {
     private int exportMaxRows = 10000;
     private int historySize = 100;
     private boolean saveSqlText = false;
+    private String jwtSecret;
+    private int jwtTtlSeconds = 12 * 3600;
     private String username;
     private String password;
     private int pageSize = 50;
@@ -35,6 +37,10 @@ public class DbWebViewProperties {
     public void setHistorySize(int value) { this.historySize = value; }
     public boolean isSaveSqlText() { return saveSqlText; }
     public void setSaveSqlText(boolean value) { this.saveSqlText = value; }
+    public String getJwtSecret() { return jwtSecret; }
+    public void setJwtSecret(String jwtSecret) { this.jwtSecret = jwtSecret; }
+    public int getJwtTtlSeconds() { return jwtTtlSeconds; }
+    public void setJwtTtlSeconds(int jwtTtlSeconds) { this.jwtTtlSeconds = jwtTtlSeconds; }
     public String getUsername() { return username; }
     public void setUsername(String username) { this.username = username; }
     public String getPassword() { return password; }
