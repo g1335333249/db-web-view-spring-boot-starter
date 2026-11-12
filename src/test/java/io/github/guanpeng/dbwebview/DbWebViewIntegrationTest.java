@@ -70,6 +70,18 @@ class DbWebViewIntegrationTest {
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
         assertEquals("first", page.get("rows").get(0).get("NAME").asText());
         assertEquals("ID", page.get("primaryKeys").get(0).asText());
+        String sqlBody = "{\"source\":\"" + source + "\",\"sql\":\"SELECT NAME FROM ITEMS WHERE ID = 1;\"}";
+        mvc.perform(post("/db-web-view/api/sql").session(session).contentType("application/json")
+                .content(sqlBody)).andExpect(status().isForbidden());
+        JsonNode sqlResult = mapper.readTree(mvc.perform(post("/db-web-view/api/sql").session(session)
+                .header("X-DB-Web-View-CSRF", csrf).contentType("application/json").content(sqlBody))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        assertEquals("resultSet", sqlResult.get("kind").asText());
+        assertEquals("first", sqlResult.get("rows").get(0).get(0).asText());
+        mvc.perform(post("/db-web-view/api/sql").session(session).header("X-DB-Web-View-CSRF", csrf)
+                .contentType("application/json").content("{\"source\":\"" + source
+                        + "\",\"sql\":\"SELECT 1; DELETE FROM ITEMS\"}"))
+                .andExpect(status().isBadRequest());
         mvc.perform(post("/db-web-view/api/rows").session(session).contentType("application/json")
                 .content(target + ",\"values\":{\"ID\":2,\"NAME\":\"second\"}}"))
                 .andExpect(status().isForbidden());
@@ -82,6 +94,14 @@ class DbWebViewIntegrationTest {
                 .contentType("application/json").content(target + ",\"keys\":{\"ID\":2},\"values\":{\"NAME\":\"updated\"}}"))
                 .andExpect(status().isOk());
         assertEquals("updated", jdbc.queryForObject("SELECT NAME FROM ITEMS WHERE ID=2", String.class));
+
+        JsonNode updateSqlResult = mapper.readTree(mvc.perform(post("/db-web-view/api/sql").session(session)
+                .header("X-DB-Web-View-CSRF", csrf).contentType("application/json")
+                .content("{\"source\":\"" + source + "\",\"sql\":\"UPDATE ITEMS SET NAME = 'via SQL' WHERE ID = 2\"}"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        assertEquals("update", updateSqlResult.get("kind").asText());
+        assertEquals(1, updateSqlResult.get("affected").asInt());
+        assertEquals("via SQL", jdbc.queryForObject("SELECT NAME FROM ITEMS WHERE ID=2", String.class));
 
         mvc.perform(delete("/db-web-view/api/rows").session(session).header("X-DB-Web-View-CSRF", csrf)
                 .contentType("application/json").content(target + ",\"keys\":{\"ID\":2}}"))

@@ -33,6 +33,11 @@
         <nav id="table-list" aria-label="数据表"></nav>
       </aside>
       <main class="content">
+        <div class="mode-tabs" role="tablist" aria-label="工作区">
+          <button id="tab-table" class="mode-tab active" role="tab" aria-selected="true">数据表</button>
+          <button id="tab-sql" class="mode-tab" role="tab" aria-selected="false">SQL 控制台</button>
+        </div>
+        <section id="table-panel" class="work-panel">
         <div class="content-header">
           <div><div id="breadcrumb" class="eyebrow">请选择数据表</div><h2 id="table-title">选择左侧数据表</h2></div>
           <div class="toolbar"><button id="refresh" disabled>刷新</button><button id="add" class="primary" disabled>新增记录</button></div>
@@ -40,6 +45,16 @@
         <div id="table-meta" class="table-meta"></div>
         <div class="grid-wrap"><table id="data-grid"><thead></thead><tbody></tbody></table><div id="empty" class="empty">选择一张表开始浏览</div></div>
         <footer class="pagination"><span id="page-info"></span><div><button id="prev" disabled>上一页</button><button id="next" disabled>下一页</button></div></footer>
+        </section>
+        <section id="sql-panel" class="work-panel hidden">
+          <div class="content-header"><div><div class="eyebrow">当前数据源：<span id="sql-source">—</span></div><h2>SQL 控制台</h2></div></div>
+          <p class="sql-hint">一次执行一条 SQL。支持查询及写入语句；写入和结构变更会立即作用于当前数据源。</p>
+          <label for="sql-input" class="field-label">SQL 语句</label>
+          <textarea id="sql-input" class="sql-input" spellcheck="false" placeholder="SELECT * FROM your_table LIMIT 20;"></textarea>
+          <div class="sql-actions"><span>Ctrl/⌘ + Enter 执行</span><button id="run-sql" class="primary">执行 SQL</button></div>
+          <div id="sql-status" class="table-meta" role="status">输入 SQL 后点击执行</div>
+          <div class="grid-wrap"><table id="sql-grid"><thead></thead><tbody></tbody></table><div id="sql-empty" class="empty">执行结果将显示在这里</div></div>
+        </section>
       </main>
     </div>
   </div>

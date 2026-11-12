@@ -1,6 +1,6 @@
 (() => {
   const $ = id => document.getElementById(id);
-  const state = {csrf:null,source:null,table:null,tables:[],page:0,data:null};
+  const state = {csrf:null,source:null,table:null,tables:[],page:0,data:null,view:'table'};
   const base = location.pathname.replace(/\/$/, '') + '/api';
   const qs = data => '?' + new URLSearchParams(data).toString();
   async function api(path, options={}) {
@@ -23,6 +23,16 @@
   }
   function showLogin() { state.csrf = null; $('app').classList.add('hidden'); $('login').classList.remove('hidden'); }
   function showApp() { $('login').classList.add('hidden'); $('app').classList.remove('hidden'); }
+  function switchView(view) {
+    state.view = view;
+    $('table-panel').classList.toggle('hidden', view !== 'table');
+    $('sql-panel').classList.toggle('hidden', view !== 'sql');
+    for (const name of ['table', 'sql']) {
+      $('tab-' + name).classList.toggle('active', name === view);
+      $('tab-' + name).setAttribute('aria-selected', String(name === view));
+    }
+    if (view === 'sql') $('sql-input').focus();
+  }
   async function start() {
     try {
       state.csrf = (await api('/session')).csrf;
@@ -35,6 +45,7 @@
     const select = $('source'); select.replaceChildren();
     list.forEach(name => { const option = document.createElement('option'); option.value = name; option.textContent = name; select.append(option); });
     state.source = list[0] || null;
+    $('sql-source').textContent = state.source || '—';
     if (state.source) await loadTables();
     else $('table-list').textContent = '未发现数据源';
   }
@@ -52,7 +63,7 @@
       if (group !== t.namespace) { group = t.namespace; const heading = document.createElement('div'); heading.className = 'group-title'; heading.textContent = group; nav.append(heading); }
       const button = document.createElement('button'); button.className = 'table-link' + (state.table && state.table.namespace === t.namespace && state.table.name === t.name ? ' active' : '');
       button.textContent = t.name + (t.type === 'VIEW' ? ' · 视图' : '');
-      button.onclick = () => { state.table = t; state.page = 0; renderTables(); loadRows().catch(e => toast(e.message)); };
+      button.onclick = () => { state.table = t; state.page = 0; switchView('table'); renderTables(); loadRows().catch(e => toast(e.message)); };
       nav.append(button);
     });
     if (!nav.children.length) nav.textContent = '没有匹配的数据表';
@@ -141,6 +152,41 @@
       toast(`已删除，影响 ${result.affected} 行`); await loadRows();
     } catch (error) { toast(error.message); }
   }
+  async function runSql() {
+    if ($('run-sql').disabled) return;
+    if (!state.source) { toast('没有可用的数据源'); return; }
+    const sql = $('sql-input').value.trim();
+    if (!sql) { toast('请输入 SQL'); return; }
+    if (!/^\s*(SELECT|SHOW|EXPLAIN|DESCRIBE|DESC)\b/i.test(sql)
+        && !confirm('这条 SQL 可能修改数据或数据库结构。确定执行吗？')) return;
+    const source = state.source;
+    const button = $('run-sql'); button.disabled = true; button.textContent = '执行中…';
+    $('sql-status').textContent = '正在执行…';
+    try {
+      const result = await api('/sql', {method:'POST',body:JSON.stringify({source,sql})});
+      if (source !== state.source) return;
+      const head = $('sql-grid').querySelector('thead'); const body = $('sql-grid').querySelector('tbody');
+      head.replaceChildren(); body.replaceChildren();
+      if (result.kind === 'resultSet') {
+        const row = document.createElement('tr');
+        result.columns.forEach(name => { const th = document.createElement('th'); th.textContent = name; row.append(th); });
+        head.append(row);
+        result.rows.forEach(values => {
+          const tr = document.createElement('tr');
+          values.forEach(value => { const td = document.createElement('td'); td.textContent = value === null ? 'NULL' : String(value); if (value === null) td.className = 'null'; td.title = td.textContent; tr.append(td); });
+          body.append(tr);
+        });
+        $('sql-status').textContent = `查询完成 · ${result.rowCount} 行${result.truncated ? '（已达到显示上限）' : ''} · ${result.elapsedMs} 毫秒`;
+        $('sql-empty').textContent = '查询完成，没有返回记录';
+        $('sql-empty').classList.toggle('hidden', result.rows.length > 0);
+      } else {
+        $('sql-empty').textContent = '语句执行成功'; $('sql-empty').classList.remove('hidden');
+        $('sql-status').textContent = `执行完成 · 影响 ${result.affected} 行 · ${result.elapsedMs} 毫秒`;
+        if (state.source && state.table) loadRows().catch(e => toast(e.message));
+      }
+    } catch (error) { if (source === state.source) { $('sql-status').textContent = error.message; toast(error.message); } }
+    finally { button.disabled = false; button.textContent = '执行 SQL'; }
+  }
   $('login-form').onsubmit = async event => {
     event.preventDefault(); $('login-error').textContent = '';
     try {
@@ -149,7 +195,13 @@
     } catch (error) { $('login-error').textContent = error.message; }
   };
   $('logout').onclick = async () => { try { await api('/logout',{method:'POST'}); } finally { showLogin(); } };
-  $('source').onchange = () => { state.source = $('source').value; loadTables().catch(e => toast(e.message)); };
+  $('source').onchange = () => {
+    state.source = $('source').value; $('sql-source').textContent = state.source || '—';
+    $('sql-grid').querySelector('thead').replaceChildren(); $('sql-grid').querySelector('tbody').replaceChildren();
+    $('sql-empty').textContent = '执行结果将显示在这里'; $('sql-empty').classList.remove('hidden');
+    $('sql-status').textContent = '已切换数据源，请重新执行 SQL';
+    loadTables().catch(e => toast(e.message));
+  };
   $('refresh-tables').onclick = () => { if (state.source) loadTables().catch(e => toast(e.message)); };
   $('table-search').oninput = renderTables;
   $('refresh').onclick = () => loadRows().catch(e => toast(e.message));
@@ -158,5 +210,9 @@
   $('next').onclick = () => { state.page++; loadRows().catch(e => toast(e.message)); };
   $('editor-form').onsubmit = saveEditor;
   $('close-editor').onclick = $('cancel-editor').onclick = () => $('editor').close();
+  $('tab-table').onclick = () => switchView('table');
+  $('tab-sql').onclick = () => switchView('sql');
+  $('run-sql').onclick = runSql;
+  $('sql-input').onkeydown = event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); runSql(); } };
   start();
 })();

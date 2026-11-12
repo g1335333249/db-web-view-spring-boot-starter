@@ -25,8 +25,14 @@ public class DbWebViewAutoConfiguration {
     }
 
     @Bean
-    public DbWebViewController dbWebViewController(DatabaseService service, DbWebViewProperties properties) {
-        return new DbWebViewController(service, properties);
+    public SqlConsoleService dbWebViewSqlConsoleService(DataSourceRegistry registry, DbWebViewProperties properties) {
+        return new SqlConsoleService(registry, properties);
+    }
+
+    @Bean
+    public DbWebViewController dbWebViewController(DatabaseService service, SqlConsoleService sqlService,
+                                                   DbWebViewProperties properties) {
+        return new DbWebViewController(service, sqlService, properties);
     }
 
     @Bean

@@ -23,11 +23,13 @@ import java.util.Map;
 public class DbWebViewController {
     private static final Logger log = LoggerFactory.getLogger(DbWebViewController.class);
     private final DatabaseService service;
+    private final SqlConsoleService sqlService;
     private final DbWebViewProperties properties;
     private final SecureRandom random = new SecureRandom();
 
-    public DbWebViewController(DatabaseService service, DbWebViewProperties properties) {
+    public DbWebViewController(DatabaseService service, SqlConsoleService sqlService, DbWebViewProperties properties) {
         this.service = service;
+        this.sqlService = sqlService;
         this.properties = properties;
     }
 
@@ -125,6 +127,14 @@ public class DbWebViewController {
         return affected(count);
     }
 
+    @PostMapping("/api/sql")
+    public Map<String, Object> executeSql(@RequestBody SqlRequest request) throws SQLException {
+        Map<String, Object> result = sqlService.execute(request.source, request.sql);
+        log.info("DB Web View SQL source={} kind={} affected={} returned={}", request.source,
+                result.get("kind"), result.get("affected"), result.get("rowCount"));
+        return result;
+    }
+
     private void audit(String action, RowRequest request, int count) {
         log.info("DB Web View {} source={} namespace={} table={} affected={}",
                 action, request.source, request.namespace, request.table, count);
@@ -166,6 +176,11 @@ public class DbWebViewController {
         public String table;
         public Map<String, Object> keys;
         public Map<String, Object> values;
+    }
+
+    public static class SqlRequest {
+        public String source;
+        public String sql;
     }
 
     private static class UnauthorizedException extends RuntimeException {

@@ -8,6 +8,8 @@ public class DbWebViewProperties {
     private String password;
     private int pageSize = 50;
     private int maxPageSize = 200;
+    private int sqlMaxRows = 200;
+    private int sqlTimeoutSeconds = 30;
 
     public String getUsername() { return username; }
     public void setUsername(String username) { this.username = username; }
@@ -17,4 +19,8 @@ public class DbWebViewProperties {
     public void setPageSize(int pageSize) { this.pageSize = pageSize; }
     public int getMaxPageSize() { return maxPageSize; }
     public void setMaxPageSize(int maxPageSize) { this.maxPageSize = maxPageSize; }
+    public int getSqlMaxRows() { return sqlMaxRows; }
+    public void setSqlMaxRows(int sqlMaxRows) { this.sqlMaxRows = sqlMaxRows; }
+    public int getSqlTimeoutSeconds() { return sqlTimeoutSeconds; }
+    public void setSqlTimeoutSeconds(int sqlTimeoutSeconds) { this.sqlTimeoutSeconds = sqlTimeoutSeconds; }
 }
