@@ -57,6 +57,8 @@ class DbWebViewIntegrationTest {
                 .andExpect(status().isOk()).andReturn();
         MockHttpSession session = (MockHttpSession) login.getRequest().getSession(false);
         String csrf = mapper.readTree(login.getResponse().getContentAsString()).get("csrf").asText();
+        mvc.perform(get("/db-web-view/api/session").session(session)).andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.containsString(csrf)));
         JsonNode sources = mapper.readTree(mvc.perform(get("/db-web-view/api/sources").session(session))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
         String source = sources.get("sources").get(0).asText();

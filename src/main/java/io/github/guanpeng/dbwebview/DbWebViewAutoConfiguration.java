@@ -6,6 +6,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 
 import javax.sql.DataSource;
 
@@ -15,8 +16,8 @@ import javax.sql.DataSource;
 @EnableConfigurationProperties(DbWebViewProperties.class)
 public class DbWebViewAutoConfiguration {
     @Bean
-    public DataSourceRegistry dbWebViewDataSourceRegistry(ApplicationContext context) {
-        return new DataSourceRegistry(context);
+    public DataSourceRegistry dbWebViewDataSourceRegistry(ApplicationContext context, Environment environment) {
+        return new DataSourceRegistry(context, environment);
     }
 
     @Bean

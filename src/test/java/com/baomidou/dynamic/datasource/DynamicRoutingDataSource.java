@@ -12,8 +12,8 @@ import java.util.Map;
 public class DynamicRoutingDataSource extends AbstractDataSource {
     private final Map<String, DataSource> dataSources = new LinkedHashMap<>();
 
-    public Map<String, DataSource> getDataSources() { return dataSources; }
     public void add(String name, DataSource dataSource) { dataSources.put(name, dataSource); }
+    public DataSource getDataSource(String name) { return dataSources.get(name); }
 
     @Override public Connection getConnection() throws SQLException { throw new UnsupportedOperationException(); }
     @Override public Connection getConnection(String username, String password) throws SQLException { throw new UnsupportedOperationException(); }

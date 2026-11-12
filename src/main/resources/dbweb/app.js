@@ -36,9 +36,10 @@
   async function start() {
     try {
       state.csrf = (await api('/session')).csrf;
-      showApp();
-      await loadSources();
-    } catch (_) { showLogin(); }
+    } catch (_) { showLogin(); return; }
+    showApp();
+    try { await loadSources(); }
+    catch (error) { $('table-list').textContent = '数据源加载失败，点击刷新重试'; toast(error.message); }
   }
   async function loadSources() {
     const list = (await api('/sources')).sources;
@@ -191,8 +192,12 @@
     event.preventDefault(); $('login-error').textContent = '';
     try {
       state.csrf = (await api('/login', {method:'POST',body:JSON.stringify({username:$('username').value,password:$('password').value})})).csrf;
-      $('password').value = ''; showApp(); await loadSources();
+      $('password').value = ''; showApp();
     } catch (error) { $('login-error').textContent = error.message; }
+    if (state.csrf) {
+      try { await loadSources(); }
+      catch (error) { $('table-list').textContent = '数据源加载失败，点击刷新重试'; toast(error.message); }
+    }
   };
   $('logout').onclick = async () => { try { await api('/logout',{method:'POST'}); } finally { showLogin(); } };
   $('source').onchange = () => {
@@ -202,7 +207,9 @@
     $('sql-status').textContent = '已切换数据源，请重新执行 SQL';
     loadTables().catch(e => toast(e.message));
   };
-  $('refresh-tables').onclick = () => { if (state.source) loadTables().catch(e => toast(e.message)); };
+  $('refresh-tables').onclick = () => {
+    (state.source ? loadTables() : loadSources()).catch(e => toast(e.message));
+  };
   $('table-search').oninput = renderTables;
   $('refresh').onclick = () => loadRows().catch(e => toast(e.message));
   $('add').onclick = () => openEditor();
