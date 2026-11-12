@@ -36,6 +36,7 @@
         <div class="mode-tabs" role="tablist" aria-label="工作区">
           <button id="tab-table" class="mode-tab active" role="tab" aria-selected="true">数据表</button>
           <button id="tab-sql" class="mode-tab" role="tab" aria-selected="false">SQL 控制台</button>
+          <button id="tab-audit" class="mode-tab" role="tab" aria-selected="false">操作审计</button>
         </div>
         <section id="table-panel" class="work-panel">
         <div class="content-header">
@@ -57,6 +58,11 @@
           <div id="sql-status" class="table-meta" role="status">输入 SQL 后点击执行</div>
           <details><summary>执行历史</summary><button id="refresh-history">刷新历史</button><div id="sql-history" class="history-list"></div></details>
           <div class="grid-wrap"><table id="sql-grid"><thead></thead><tbody></tbody></table><div id="sql-empty" class="empty">执行结果将显示在这里</div></div>
+        </section>
+        <section id="audit-panel" class="work-panel hidden">
+          <div class="content-header"><h2>操作审计</h2><button id="refresh-audit">刷新</button></div>
+          <p class="sql-hint">显示最近的 SQL 执行和表格增删改记录。配置共享审计数据源后可跨 Pod 查看。</p>
+          <div class="grid-wrap"><table id="audit-grid"><thead></thead><tbody></tbody></table></div>
         </section>
       </main>
     </div>

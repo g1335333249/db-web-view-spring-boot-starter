@@ -36,7 +36,9 @@ class ExternalDatabaseIntegrationTest {
         assertTrue(service.tables("real").stream().anyMatch(table -> name.equalsIgnoreCase(table.get("name"))));
         assertEquals(1, ((java.util.List<?>) service.rows("real", namespace, name, 0, 20,
                 Collections.singletonMap("value_text", "real-db"), "id", true).get("rows")).size());
-        assertTrue(service.exportCsv("real", namespace, name, Collections.emptyMap(), "id", false).contains("real-db"));
+        java.io.ByteArrayOutputStream csv = new java.io.ByteArrayOutputStream();
+        service.writeCsv(csv, "real", namespace, name, Collections.emptyMap(), "id", false);
+        assertTrue(csv.toString("UTF-8").contains("real-db"));
         assertFalse((Boolean) service.rows("real", namespace, name, 0, 20).get("readOnly"));
     }
 }

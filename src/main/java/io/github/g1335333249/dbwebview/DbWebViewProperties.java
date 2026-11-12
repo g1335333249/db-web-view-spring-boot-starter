@@ -12,6 +12,12 @@ public class DbWebViewProperties {
     private int exportMaxRows = 10000;
     private int historySize = 100;
     private boolean saveSqlText = false;
+    private String auditSource;
+    private boolean auditAutoCreate = false;
+    private int auditRetentionDays = 30;
+    private boolean loginTrustForwardedFor = false;
+    private int loginMaxAttempts = 5;
+    private int loginWindowSeconds = 300;
     private String jwtSecret;
     private int jwtTtlSeconds = 12 * 3600;
     private String username;
@@ -37,6 +43,18 @@ public class DbWebViewProperties {
     public void setHistorySize(int value) { this.historySize = value; }
     public boolean isSaveSqlText() { return saveSqlText; }
     public void setSaveSqlText(boolean value) { this.saveSqlText = value; }
+    public boolean isAuditAutoCreate() { return auditAutoCreate; }
+    public void setAuditAutoCreate(boolean value) { this.auditAutoCreate = value; }
+    public String getAuditSource() { return auditSource; }
+    public void setAuditSource(String auditSource) { this.auditSource = auditSource; }
+    public int getAuditRetentionDays() { return auditRetentionDays; }
+    public void setAuditRetentionDays(int value) { this.auditRetentionDays = value; }
+    public boolean isLoginTrustForwardedFor() { return loginTrustForwardedFor; }
+    public void setLoginTrustForwardedFor(boolean value) { this.loginTrustForwardedFor = value; }
+    public int getLoginMaxAttempts() { return loginMaxAttempts; }
+    public void setLoginMaxAttempts(int value) { this.loginMaxAttempts = value; }
+    public int getLoginWindowSeconds() { return loginWindowSeconds; }
+    public void setLoginWindowSeconds(int value) { this.loginWindowSeconds = value; }
     public String getJwtSecret() { return jwtSecret; }
     public void setJwtSecret(String jwtSecret) { this.jwtSecret = jwtSecret; }
     public int getJwtTtlSeconds() { return jwtTtlSeconds; }

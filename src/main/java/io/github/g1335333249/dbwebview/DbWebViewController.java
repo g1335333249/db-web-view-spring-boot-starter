@@ -15,8 +15,6 @@ import java.sql.SQLException;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.List;
-import java.util.ArrayList;
 
 @RestController
 @RequestMapping("/db-web-view")
@@ -26,13 +24,14 @@ public class DbWebViewController {
     private final SqlConsoleService sqlService;
     private final DbWebViewProperties properties;
     private final JwtAuthService jwt;
-    private final List<Map<String, Object>> history = new ArrayList<>();
+    private final AuditStore auditStore;
 
-    public DbWebViewController(DatabaseService service, SqlConsoleService sqlService, DbWebViewProperties properties, JwtAuthService jwt) {
+    public DbWebViewController(DatabaseService service, SqlConsoleService sqlService, DbWebViewProperties properties, JwtAuthService jwt, AuditStore auditStore) {
         this.service = service;
         this.sqlService = sqlService;
         this.properties = properties;
         this.jwt = jwt;
+        this.auditStore = auditStore;
     }
 
     @GetMapping("")
@@ -62,14 +61,18 @@ public class DbWebViewController {
     }
 
     @PostMapping("/api/login")
-    public Map<String, Object> login(@RequestBody Map<String, String> body, HttpServletRequest request, HttpServletResponse response) {
+    public Map<String, Object> login(@RequestBody Map<String, String> body, HttpServletRequest request, HttpServletResponse response) throws SQLException {
         ensureConfigured();
+        String ip = clientIp(request);
+        if (auditStore.tooManyFailures(ip)) throw new TooManyRequestsException("登录失败次数过多，请稍后再试");
         if (body == null || !matches(properties.getUsername(), body.get("username"))
                 || !matches(properties.getPassword(), body.get("password"))) {
-            log.warn("DB Web View login failed from {}", request.getRemoteAddr());
+            auditStore.failedLogin(ip);
+            log.warn("DB Web View login failed from {}", ip);
             throw new UnauthorizedException("账号或密码错误");
         }
-        log.info("DB Web View login succeeded from {}", request.getRemoteAddr());
+        auditStore.successfulLogin(ip);
+        log.info("DB Web View login succeeded from {}", ip);
         return Collections.singletonMap("csrf", jwt.issue(request, response));
     }
 
@@ -80,8 +83,10 @@ public class DbWebViewController {
     }
 
     @PostMapping("/api/logout")
-    public Map<String, Object> logout(HttpServletRequest request, HttpServletResponse response) {
-        jwt.clear(request, response);
+    public Map<String, Object> logout(HttpServletRequest request, HttpServletResponse response) throws SQLException {
+        JwtAuthService.Claims claims = (JwtAuthService.Claims) request.getAttribute(DbWebViewAuthFilter.CLAIMS);
+        try { auditStore.revoke(claims.jti, claims.exp); }
+        finally { jwt.clear(request, response); }
         return Collections.singletonMap("ok", true);
     }
 
@@ -106,8 +111,9 @@ public class DbWebViewController {
                                     @RequestParam(defaultValue = "-1") int size,
                                     @RequestParam(required = false) String sort,
                                     @RequestParam(defaultValue = "false") boolean descending,
-                                    @RequestParam(required = false) String filters) throws SQLException {
-        return service.rows(source, namespace, table, page, size, parseFilters(filters), sort, descending);
+                                    @RequestParam(required = false) String filters,
+                                    @RequestParam(required = false) String cursor) throws SQLException {
+        return service.rows(source, namespace, table, page, size, parseFilters(filters), sort, descending, cursor);
     }
 
     @GetMapping("/api/structure")
@@ -117,14 +123,16 @@ public class DbWebViewController {
     }
 
     @GetMapping(value = "/api/export", produces = "text/csv;charset=UTF-8")
-    public ResponseEntity<byte[]> export(@RequestParam String source, @RequestParam String namespace,
-                                         @RequestParam String table, @RequestParam(required = false) String sort,
-                                         @RequestParam(defaultValue = "false") boolean descending,
-                                         @RequestParam(required = false) String filters) throws SQLException {
-        String csv = service.exportCsv(source, namespace, table, parseFilters(filters), sort, descending);
-        return ResponseEntity.ok().header("Content-Disposition", "attachment; filename=table.csv")
-                .header("Cache-Control", "no-store")
-                .body(csv.getBytes(StandardCharsets.UTF_8));
+    public void export(@RequestParam String source, @RequestParam String namespace,
+                       @RequestParam String table, @RequestParam(required = false) String sort,
+                       @RequestParam(defaultValue = "false") boolean descending,
+                       @RequestParam(required = false) String filters,
+                       HttpServletResponse response) throws SQLException, java.io.IOException {
+        Map<String, String> checked = parseFilters(filters);
+        response.setContentType("text/csv;charset=UTF-8");
+        response.setHeader("Content-Disposition", "attachment; filename=table.csv");
+        response.setHeader("Cache-Control", "no-store");
+        service.writeCsv(response.getOutputStream(), source, namespace, table, checked, sort, descending);
     }
 
     private Map<String, String> parseFilters(String raw) {
@@ -142,44 +150,51 @@ public class DbWebViewController {
     }
 
     @PostMapping("/api/rows")
-    public Map<String, Object> insert(@RequestBody RowRequest request) throws SQLException {
+    public Map<String, Object> insert(@RequestBody RowRequest request, HttpServletRequest http) throws SQLException {
+        auditStore.checkAvailable();
         int count = service.insert(request.source, request.namespace, request.table, request.values);
-        audit("insert", request, count);
-        return affected(count);
+        return affected(count, audit("insert", request, count, http));
     }
 
     @PutMapping("/api/rows")
-    public Map<String, Object> update(@RequestBody RowRequest request) throws SQLException {
+    public Map<String, Object> update(@RequestBody RowRequest request, HttpServletRequest http) throws SQLException {
+        auditStore.checkAvailable();
         int count = service.update(request.source, request.namespace, request.table, request.keys, request.values);
-        audit("update", request, count);
-        return affected(count);
+        return affected(count, audit("update", request, count, http));
     }
 
     @DeleteMapping("/api/rows")
-    public Map<String, Object> delete(@RequestBody RowRequest request) throws SQLException {
+    public Map<String, Object> delete(@RequestBody RowRequest request, HttpServletRequest http) throws SQLException {
+        auditStore.checkAvailable();
         int count = service.delete(request.source, request.namespace, request.table, request.keys);
-        audit("delete", request, count);
-        return affected(count);
+        return affected(count, audit("delete", request, count, http));
     }
 
     @PostMapping("/api/sql")
     public Map<String, Object> executeSql(@RequestBody SqlRequest request, HttpServletRequest http) throws SQLException {
         if (!sqlAvailable()) throw new IllegalArgumentException("SQL 控制台已关闭（配置表白名单时不可使用）");
+        auditStore.checkAvailable();
         long started = System.nanoTime();
-        try {
-            Map<String, Object> result = sqlService.execute(request.source, request.sql);
-            recordSql(request, http, result, null, (System.nanoTime() - started) / 1_000_000);
-            return result;
-        } catch (SQLException | RuntimeException ex) {
+        Map<String, Object> result;
+        try { result = sqlService.execute(request.source, request.sql); }
+        catch (SQLException | RuntimeException ex) {
             recordSql(request, http, null, auditError(ex), (System.nanoTime() - started) / 1_000_000);
             throw ex;
         }
+        if (!recordSql(request, http, result, null, (System.nanoTime() - started) / 1_000_000))
+            result.put("auditWarning", "操作已执行，但审计写入失败");
+        return result;
     }
 
     @GetMapping("/api/sql/history")
-    public synchronized Map<String, Object> sqlHistory() {
+    public Map<String, Object> sqlHistory() throws SQLException {
         if (!sqlAvailable()) throw new IllegalArgumentException("SQL 控制台已关闭（配置表白名单时不可使用）");
-        return Collections.singletonMap("history", new ArrayList<>(history));
+        return Collections.singletonMap("history", auditStore.sqlHistory());
+    }
+
+    @GetMapping("/api/audit")
+    public Map<String, Object> auditHistory() throws SQLException {
+        return Collections.singletonMap("history", auditStore.auditHistory());
     }
 
     private String auditError(Exception ex) {
@@ -194,31 +209,55 @@ public class DbWebViewController {
         return properties.isSqlEnabled() && (properties.getAllowedTables() == null || properties.getAllowedTables().isEmpty());
     }
 
-    private synchronized void recordSql(SqlRequest request, HttpServletRequest http, Map<String, Object> result,
-                                        String error, long elapsed) {
+    private boolean recordSql(SqlRequest request, HttpServletRequest http, Map<String, Object> result,
+                              String error, long elapsed) {
         Map<String, Object> item = new LinkedHashMap<>();
-        item.put("time", java.time.Instant.now().toString()); item.put("source", request.source);
-        item.put("ip", http.getRemoteAddr()); item.put("elapsedMs", elapsed);
-        item.put("kind", result == null ? "error" : result.get("kind"));
+        item.put("time", java.time.Instant.now().toString()); item.put("action", "sql");
+        item.put("source", request.source); item.put("ip", clientIp(http));
+        item.put("elapsedMs", elapsed); item.put("kind", result == null ? "error" : result.get("kind"));
         item.put("affected", result == null ? null : result.get("affected"));
         item.put("rowCount", result == null ? null : result.get("rowCount"));
         item.put("error", error);
         if (properties.isSaveSqlText()) item.put("sql", request.sql);
-        history.add(0, item);
-        while (history.size() > Math.max(1, Math.min(1000, properties.getHistorySize()))) history.remove(history.size() - 1);
+        boolean saved = saveAudit(item);
         log.info("DB Web View SQL source={} ip={} kind={} affected={} returned={} elapsedMs={} error={}",
-                request.source, http.getRemoteAddr(), item.get("kind"), item.get("affected"), item.get("rowCount"), elapsed, error);
+                request.source, clientIp(http), item.get("kind"), item.get("affected"), item.get("rowCount"), elapsed, error);
+        return saved;
     }
 
-    private void audit(String action, RowRequest request, int count) {
+    private boolean audit(String action, RowRequest request, int count, HttpServletRequest http) {
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("time", java.time.Instant.now().toString()); item.put("action", action);
+        item.put("source", request.source); item.put("namespace", request.namespace);
+        item.put("table", request.table); item.put("ip", clientIp(http));
+        item.put("kind", "update"); item.put("affected", count);
+        boolean saved = saveAudit(item);
         log.info("DB Web View {} source={} namespace={} table={} affected={}",
                 action, request.source, request.namespace, request.table, count);
+        return saved;
     }
 
-    private Map<String, Object> affected(int count) {
+    private boolean saveAudit(Map<String, Object> item) {
+        try { auditStore.record(item); return true; }
+        catch (SQLException ex) { log.error("DB Web View audit write failed after operation", ex); return false; }
+    }
+
+    private Map<String, Object> affected(int count, boolean auditSaved) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("affected", count);
+        if (!auditSaved) result.put("auditWarning", "操作已执行，但审计写入失败");
         return result;
+    }
+
+    private String clientIp(HttpServletRequest request) {
+        if (properties.isLoginTrustForwardedFor()) {
+            String forwarded = request.getHeader("X-Forwarded-For");
+            if (forwarded != null) {
+                String first = forwarded.split(",", 2)[0].trim();
+                if (!first.isEmpty() && first.length() <= 64 && first.matches("[0-9A-Fa-f:.]+")) return first;
+            }
+        }
+        return request.getRemoteAddr();
     }
 
     private boolean matches(String expected, String actual) {
@@ -232,6 +271,12 @@ public class DbWebViewController {
                 || properties.getPassword() == null || properties.getPassword().isEmpty()) {
             throw new IllegalStateException("需要先配置 db-web-view.username 和 db-web-view.password");
         }
+    }
+
+    @ExceptionHandler(TooManyRequestsException.class)
+    public ResponseEntity<Map<String, String>> tooMany(TooManyRequestsException ex) {
+        return ResponseEntity.status(429).header("Retry-After", String.valueOf(Math.max(60, properties.getLoginWindowSeconds())))
+                .body(Collections.singletonMap("error", ex.getMessage()));
     }
 
     @ExceptionHandler(UnauthorizedException.class)
@@ -256,6 +301,10 @@ public class DbWebViewController {
     public static class SqlRequest {
         public String source;
         public String sql;
+    }
+
+    private static class TooManyRequestsException extends RuntimeException {
+        TooManyRequestsException(String message) { super(message); }
     }
 
     private static class UnauthorizedException extends RuntimeException {

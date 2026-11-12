@@ -63,6 +63,7 @@ public class JwtAuthService {
         if (parts.length != 3 || !HEADER.equals(parts[0])) return null;
         try {
             byte[] signature = DECODER.decode(parts[2]);
+            if (!parts[2].equals(ENCODER.encodeToString(signature))) return null;
             byte[] expected = hmac((parts[0] + "." + parts[1]).getBytes(StandardCharsets.US_ASCII));
             if (!MessageDigest.isEqual(expected, signature)) return null;
             JsonNode claims = mapper.readTree(DECODER.decode(parts[1]));

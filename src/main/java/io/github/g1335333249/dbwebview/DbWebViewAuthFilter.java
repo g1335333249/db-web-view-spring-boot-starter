@@ -11,8 +11,9 @@ import java.io.IOException;
 public class DbWebViewAuthFilter extends OncePerRequestFilter {
     static final String CLAIMS = DbWebViewAuthFilter.class.getName() + ".claims";
     private final JwtAuthService jwt;
+    private final AuditStore auditStore;
 
-    public DbWebViewAuthFilter(JwtAuthService jwt) { this.jwt = jwt; }
+    public DbWebViewAuthFilter(JwtAuthService jwt, AuditStore auditStore) { this.jwt = jwt; this.auditStore = auditStore; }
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
@@ -32,6 +33,9 @@ public class DbWebViewAuthFilter extends OncePerRequestFilter {
         }
         JwtAuthService.Claims claims = jwt.verify(request);
         if (claims == null) { reject(response, 401, "请先登录"); return; }
+        try {
+            if (auditStore.revoked(claims.jti)) { reject(response, 401, "登录已失效"); return; }
+        } catch (java.sql.SQLException ex) { reject(response, 503, "认证存储不可用"); return; }
         if (!"GET".equals(request.getMethod()) && !"HEAD".equals(request.getMethod())
                 && !jwt.validCsrf(claims, request.getHeader("X-DB-Web-View-CSRF"))) {
             reject(response, 403, "CSRF 校验失败");

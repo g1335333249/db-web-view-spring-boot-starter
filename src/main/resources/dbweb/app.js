@@ -1,6 +1,6 @@
 (() => {
   const $ = id => document.getElementById(id);
-  const state = {csrf:null,source:null,table:null,tables:[],page:0,data:null,view:'table',filters:{},sort:'',descending:false,settings:{}};
+  const state = {csrf:null,source:null,table:null,tables:[],page:0,data:null,view:'table',filters:{},sort:'',descending:false,settings:{},cursor:null,cursorStack:[]};
   const base = location.pathname.replace(/\/$/, '') + '/api';
   const qs = data => '?' + new URLSearchParams(data).toString();
   async function api(path, options={}) {
@@ -27,11 +27,13 @@
     state.view = view;
     $('table-panel').classList.toggle('hidden', view !== 'table');
     $('sql-panel').classList.toggle('hidden', view !== 'sql');
-    for (const name of ['table', 'sql']) {
+    $('audit-panel').classList.toggle('hidden', view !== 'audit');
+    for (const name of ['table', 'sql', 'audit']) {
       $('tab-' + name).classList.toggle('active', name === view);
       $('tab-' + name).setAttribute('aria-selected', String(name === view));
     }
     if (view === 'sql') { $('sql-input').focus(); loadHistory(); }
+    if (view === 'audit') loadAudit();
   }
   async function start() {
     try {
@@ -58,7 +60,7 @@
     else $('table-list').textContent = '未发现数据源';
   }
   async function loadTables() {
-    state.table = null; state.data = null;
+    state.table = null; state.data = null; state.cursor = null; state.cursorStack = [];
     clearGrid();
     state.tables = (await api('/tables' + qs({source:state.source}))).tables;
     renderTables();
@@ -71,7 +73,7 @@
       if (group !== t.namespace) { group = t.namespace; const heading = document.createElement('div'); heading.className = 'group-title'; heading.textContent = group; nav.append(heading); }
       const button = document.createElement('button'); button.className = 'table-link' + (state.table && state.table.namespace === t.namespace && state.table.name === t.name ? ' active' : '');
       button.textContent = t.name + (t.type === 'VIEW' ? ' · 视图' : '');
-      button.onclick = () => { state.table = t; state.page = 0; state.filters = {}; state.sort = ''; state.descending = false; $('filter-value').value = ''; $('descending').checked = false; $('structure-panel').classList.add('hidden'); switchView('table'); renderTables(); loadRows().catch(e => toast(e.message)); };
+      button.onclick = () => { state.table = t; state.page = 0; state.filters = {}; state.sort = ''; state.descending = false; state.cursor = null; state.cursorStack = []; $('filter-value').value = ''; $('descending').checked = false; $('structure-panel').classList.add('hidden'); switchView('table'); renderTables(); loadRows().catch(e => toast(e.message)); };
       nav.append(button);
     });
     if (!nav.children.length) nav.textContent = '没有匹配的数据表';
@@ -84,7 +86,7 @@
   }
   async function loadRows() {
     const t = state.table;
-    const data = await api('/rows' + qs({source:state.source,namespace:t.namespace,table:t.name,page:state.page,filters:JSON.stringify(state.filters),sort:state.sort,descending:state.descending}));
+    const data = await api('/rows' + qs({source:state.source,namespace:t.namespace,table:t.name,page:state.page,filters:JSON.stringify(state.filters),sort:state.sort,descending:state.descending,cursor:state.cursor||''}));
     state.data = data;
     $('table-title').textContent = t.name;
     $('breadcrumb').textContent = `${state.source} / ${t.namespace}`;
@@ -151,15 +153,27 @@
     if (row) request.keys = keysOf(row);
     try {
       const result = await api('/rows', {method:row ? 'PUT' : 'POST',body:JSON.stringify(request)});
-      $('editor').close(); toast(`已保存，影响 ${result.affected} 行`); await loadRows();
+      $('editor').close(); toast(result.auditWarning || `已保存，影响 ${result.affected} 行`); await loadRows();
     } catch (error) { toast(error.message); }
   }
   async function removeRow(row) {
     if (!confirm('确定删除这条记录？此操作不可撤销。')) return;
     try {
       const result = await api('/rows', {method:'DELETE',body:JSON.stringify({source:state.source,namespace:state.table.namespace,table:state.table.name,keys:keysOf(row)})});
-      toast(`已删除，影响 ${result.affected} 行`); await loadRows();
+      toast(result.auditWarning || `已删除，影响 ${result.affected} 行`); await loadRows();
     } catch (error) { toast(error.message); }
+  }
+  async function loadAudit() {
+    try {
+      const items=(await api('/audit')).history, grid=$('audit-grid');
+      const head=grid.querySelector('thead'), body=grid.querySelector('tbody');
+      head.replaceChildren(); body.replaceChildren();
+      const fields=['time','action','source','namespace','table','ip','kind','affected','rowCount','elapsedMs','error'];
+      const labels=['时间','操作','数据源','命名空间','表','IP','结果','影响行数','返回行数','耗时(ms)','错误'];
+      const row=document.createElement('tr'); labels.forEach(label=>{const th=document.createElement('th'); th.textContent=label; row.append(th);}); head.append(row);
+      items.forEach(item=>{const tr=document.createElement('tr'); fields.forEach(field=>{const td=document.createElement('td'); td.textContent=String(item[field] ?? ''); tr.append(td);}); body.append(tr);});
+      if (!items.length) toast('暂无审计记录');
+    } catch(e) { toast(e.message); }
   }
   async function loadHistory() {
     try {
@@ -181,6 +195,7 @@
     try {
       const result = await api('/sql', {method:'POST',body:JSON.stringify({source,sql})});
       loadHistory();
+      if (result.auditWarning) toast(result.auditWarning);
       if (source !== state.source) return;
       const head = $('sql-grid').querySelector('thead'); const body = $('sql-grid').querySelector('tbody');
       head.replaceChildren(); body.replaceChildren();
@@ -228,10 +243,10 @@
   };
   $('table-search').oninput = renderTables;
   $('refresh').onclick = () => loadRows().catch(e => toast(e.message));
-  $('apply-filter').onclick = () => { const column = $('filter-column').value; state.filters = column && $('filter-value').value !== '' ? {[column]:$('filter-value').value} : {}; state.page = 0; if (state.table) loadRows().catch(e => toast(e.message)); };
-  $('clear-filter').onclick = () => { state.filters = {}; $('filter-value').value = ''; state.page = 0; if (state.table) loadRows().catch(e => toast(e.message)); };
-  $('sort-column').onchange = () => { state.sort = $('sort-column').value; state.page = 0; if (state.table) loadRows().catch(e => toast(e.message)); };
-  $('descending').onchange = () => { state.descending = $('descending').checked; state.page = 0; if (state.table) loadRows().catch(e => toast(e.message)); };
+  $('apply-filter').onclick = () => { const column = $('filter-column').value; state.filters = column && $('filter-value').value !== '' ? {[column]:$('filter-value').value} : {}; state.page = 0; state.cursor = null; state.cursorStack = []; if (state.table) loadRows().catch(e => toast(e.message)); };
+  $('clear-filter').onclick = () => { state.filters = {}; $('filter-value').value = ''; state.page = 0; state.cursor = null; state.cursorStack = []; if (state.table) loadRows().catch(e => toast(e.message)); };
+  $('sort-column').onchange = () => { state.sort = $('sort-column').value; state.page = 0; state.cursor = null; state.cursorStack = []; if (state.table) loadRows().catch(e => toast(e.message)); };
+  $('descending').onchange = () => { state.descending = $('descending').checked; state.page = 0; state.cursor = null; state.cursorStack = []; if (state.table) loadRows().catch(e => toast(e.message)); };
   $('structure').onclick = async () => {
     try {
       const t = state.table, data = await api('/structure' + qs({source:state.source,namespace:t.namespace,table:t.name}));
@@ -243,21 +258,24 @@
       panel.classList.toggle('hidden');
     } catch(e) { toast(e.message); }
   };
-  $('export').onclick = async () => {
-    try {
-      const t=state.table, response=await fetch(base+'/export'+qs({source:state.source,namespace:t.namespace,table:t.name,filters:JSON.stringify(state.filters),sort:state.sort,descending:state.descending}),{credentials:'same-origin'});
-      if (!response.ok) { const body=await response.json(); throw new Error(body.error || '导出失败'); }
-      const url=URL.createObjectURL(await response.blob()), a=document.createElement('a'); a.href=url; a.download=t.name+'.csv'; a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);
-    } catch(e) { toast(e.message); }
+  $('export').onclick = () => {
+    if (!state.table) return;
+    const t = state.table;
+    const a = document.createElement('a');
+    a.href = base + '/export' + qs({source:state.source,namespace:t.namespace,table:t.name,filters:JSON.stringify(state.filters),sort:state.sort,descending:state.descending});
+    a.download = t.name + '.csv';
+    document.body.append(a); a.click(); a.remove();
   };
   $('refresh-history').onclick = loadHistory;
   $('add').onclick = () => openEditor();
-  $('prev').onclick = () => { state.page--; loadRows().catch(e => toast(e.message)); };
-  $('next').onclick = () => { state.page++; loadRows().catch(e => toast(e.message)); };
+  $('prev').onclick = () => { state.page--; state.cursor = state.cursorStack.length ? state.cursorStack.pop() : null; loadRows().catch(e => toast(e.message)); };
+  $('next').onclick = () => { state.cursorStack.push(state.cursor); state.cursor = state.data?.nextCursor || null; state.page++; loadRows().catch(e => toast(e.message)); };
   $('editor-form').onsubmit = saveEditor;
   $('close-editor').onclick = $('cancel-editor').onclick = () => $('editor').close();
   $('tab-table').onclick = () => switchView('table');
   $('tab-sql').onclick = () => switchView('sql');
+  $('tab-audit').onclick = () => switchView('audit');
+  $('refresh-audit').onclick = loadAudit;
   $('run-sql').onclick = runSql;
   $('sql-input').onkeydown = event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); runSql(); } };
   window.addEventListener('beforeunload', event => {

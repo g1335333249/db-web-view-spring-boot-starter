@@ -34,6 +34,7 @@ class DbWebViewIntegrationTest {
 
     @Autowired MockMvc mvc;
     @Autowired JdbcTemplate jdbc;
+    @Autowired DatabaseService databaseService;
     @Autowired ObjectMapper mapper;
 
     @BeforeEach
@@ -140,7 +141,8 @@ class DbWebViewIntegrationTest {
         assertEquals("ID", structure.get("primaryKeys").get(0).asText());
         mvc.perform(get("/db-web-view/api/export").cookie(cookie).param("source", source)
                 .param("namespace", "PUBLIC").param("table", "ITEMS").param("filters", "{\"NAME\":\"second\"}"))
-                .andExpect(status().isOk()).andExpect(content().string(org.hamcrest.Matchers.containsString("second")));
+                .andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("second")));
         mvc.perform(post("/db-web-view/api/sql").cookie(cookie).header("X-DB-Web-View-CSRF", csrf)
                 .contentType("application/json").content("{\"source\":\"" + source + "\",\"sql\":\"SELECT COUNT(*) FROM ITEMS\"}"))
                 .andExpect(status().isOk());
@@ -148,6 +150,55 @@ class DbWebViewIntegrationTest {
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
         assertTrue(history.get("history").size() > 0);
         assertFalse(history.get("history").get(0).has("sql"));
+    }
+
+    @Test
+    void keysetCursorContinuesAfterEarlierRowIsDeleted() throws Exception {
+        jdbc.update("INSERT INTO ITEMS (ID, NAME) VALUES (?, ?)", 2, "two");
+        jdbc.update("INSERT INTO ITEMS (ID, NAME) VALUES (?, ?)", 3, "three");
+        MvcResult login = mvc.perform(post("/db-web-view/api/login").contentType("application/json")
+                .content("{\"username\":\"admin\",\"password\":\"secret\"}"))
+                .andExpect(status().isOk()).andReturn();
+        Cookie cookie = cookie(login);
+        String source = mapper.readTree(mvc.perform(get("/db-web-view/api/sources").cookie(cookie))
+                .andReturn().getResponse().getContentAsString()).get("sources").get(0).asText();
+        JsonNode first = mapper.readTree(mvc.perform(get("/db-web-view/api/rows").cookie(cookie)
+                .param("source", source).param("namespace", "PUBLIC").param("table", "ITEMS")
+                .param("page", "0").param("size", "1"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        assertEquals(1, first.get("rows").get(0).get("ID").asInt());
+        String cursor = first.get("nextCursor").asText();
+        jdbc.execute("DELETE FROM ITEMS WHERE ID=1");
+        JsonNode second = mapper.readTree(mvc.perform(get("/db-web-view/api/rows").cookie(cookie)
+                .param("source", source).param("namespace", "PUBLIC").param("table", "ITEMS")
+                .param("page", "1").param("size", "1").param("cursor", cursor))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        assertEquals(2, second.get("rows").get(0).get("ID").asInt());
+    }
+
+    @Test
+    void tooManyLoginFailuresReturn429() throws Exception {
+        for (int i = 0; i < 5; i++)
+            mvc.perform(post("/db-web-view/api/login").with(request -> { request.setRemoteAddr("192.0.2.44"); return request; })
+                    .contentType("application/json")
+                    .content("{\"username\":\"admin\",\"password\":\"wrong\"}"))
+                    .andExpect(status().isUnauthorized());
+        mvc.perform(post("/db-web-view/api/login").with(request -> { request.setRemoteAddr("192.0.2.44"); return request; })
+                .contentType("application/json")
+                .content("{\"username\":\"admin\",\"password\":\"secret\"}"))
+                .andExpect(status().isTooManyRequests());
+    }
+
+    @Test
+    void csvExportStreamsAcrossPagesWithoutDuplicates() throws Exception {
+        for (int i = 2; i <= 205; i++) jdbc.update("INSERT INTO ITEMS (ID, NAME) VALUES (?, ?)", i, "name-" + i);
+        java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+        databaseService.writeCsv(output, "dataSource", "PUBLIC", "ITEMS",
+                java.util.Collections.emptyMap(), null, false);
+        String csv = output.toString("UTF-8");
+        assertEquals(206, csv.split("\r\n").length);
+        assertTrue(csv.contains("name-205"));
+        assertEquals(1, csv.split("name-205", -1).length - 1);
     }
 
     private Cookie cookie(MvcResult login) {

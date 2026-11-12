@@ -29,6 +29,19 @@ public class DataSourceRegistry {
     }
 
     public Map<String, DataSource> list() {
+        Map<String, DataSource> result = new LinkedHashMap<>(listAll());
+        if (properties.getAllowedSources() != null && !properties.getAllowedSources().isEmpty())
+            result.keySet().retainAll(properties.getAllowedSources());
+        return Collections.unmodifiableMap(result);
+    }
+
+    public DataSource requireInternal(String name) {
+        DataSource dataSource = listAll().get(name);
+        if (dataSource == null) throw new IllegalArgumentException("未知内部数据源: " + name);
+        return dataSource;
+    }
+
+    private Map<String, DataSource> listAll() {
         Map<String, DataSource> beans = context.getBeansOfType(DataSource.class);
         Map<String, DataSource> result = new LinkedHashMap<>();
         for (Map.Entry<String, DataSource> bean : beans.entrySet()) {
@@ -41,8 +54,7 @@ public class DataSourceRegistry {
             if (children.isEmpty()) result.put(bean.getKey(), source);
             else result.putAll(children);
         }
-        if (!properties.getAllowedSources().isEmpty()) result.keySet().retainAll(properties.getAllowedSources());
-        return Collections.unmodifiableMap(result);
+        return result;
     }
 
     public DataSource require(String name) {

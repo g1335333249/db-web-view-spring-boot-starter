@@ -2,6 +2,11 @@ package io.github.g1335333249.dbwebview;
 
 import javax.sql.DataSource;
 import java.math.BigDecimal;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
+import java.nio.charset.StandardCharsets;
 import java.sql.*;
 import java.util.*;
 
@@ -47,6 +52,11 @@ public class DatabaseService {
 
     public Map<String, Object> rows(String source, String namespace, String tableName, int page, int size,
                                     Map<String, String> filters, String sort, boolean descending) throws SQLException {
+        return rows(source, namespace, tableName, page, size, filters, sort, descending, null);
+    }
+
+    public Map<String, Object> rows(String source, String namespace, String tableName, int page, int size,
+                                    Map<String, String> filters, String sort, boolean descending, String cursor) throws SQLException {
         if (page < 0) throw new IllegalArgumentException("页码不能小于 0");
         int max = Math.max(1, Math.min(1000, properties.getMaxPageSize()));
         int actualSize = Math.max(1, Math.min(size <= 0 ? properties.getPageSize() : size, max));
@@ -57,6 +67,9 @@ public class DatabaseService {
             StringBuilder sql = new StringBuilder("SELECT * FROM ").append(table.qualifiedName);
             Map<String, String> checkedFilters = filters == null ? Collections.emptyMap() : filters;
             if (checkedFilters.size() > 20) throw new IllegalArgumentException("筛选字段过多");
+            boolean keyset = table.primaryKeys.size() == 1 && (sort == null || sort.isEmpty()) && !descending;
+            if (cursor != null && !cursor.isEmpty() && !keyset) throw new IllegalArgumentException("此排序不支持游标翻页");
+            List<String> termsList = new ArrayList<>();
             if (!checkedFilters.isEmpty()) {
                 StringJoiner terms = new StringJoiner(" AND ");
                 for (String column : checkedFilters.keySet()) {
@@ -64,21 +77,35 @@ public class DatabaseService {
                     if (definition == null || definition.binary) throw new IllegalArgumentException("不可筛选字段: " + column);
                     terms.add(quote(connection, column) + " = ?");
                 }
-                sql.append(" WHERE ").append(terms);
+                termsList.add(terms.toString());
             }
+            if (cursor != null && !cursor.isEmpty()) {
+                if (cursor.length() > 1024) throw new IllegalArgumentException("游标过长");
+                termsList.add(quote(connection, table.primaryKeys.get(0)) + " > ?");
+            }
+            if (!termsList.isEmpty()) sql.append(" WHERE ").append(String.join(" AND ", termsList));
             if (sort != null && !sort.isEmpty() && !table.columns.containsKey(sort))
                 throw new IllegalArgumentException("未知排序字段: " + sort);
             List<String> order = new ArrayList<>();
             if (sort != null && !sort.isEmpty()) order.add(quote(connection, sort) + (descending ? " DESC" : " ASC"));
             for (String key : table.primaryKeys) if (!key.equals(sort)) order.add(quote(connection, key));
             if (!order.isEmpty()) sql.append(" ORDER BY ").append(String.join(", ", order));
-            sql.append(" LIMIT ? OFFSET ?");
+            sql.append(" LIMIT ?");
+            if (!keyset || (page > 0 && (cursor == null || cursor.isEmpty()))) sql.append(" OFFSET ?");
             try (PreparedStatement statement = connection.prepareStatement(sql.toString())) {
                 int parameter = 1;
                 for (Map.Entry<String, String> entry : checkedFilters.entrySet())
                     statement.setObject(parameter++, convert(entry.getValue(), table.columns.get(entry.getKey()).jdbcType));
+                if (cursor != null && !cursor.isEmpty()) {
+                    String key = table.primaryKeys.get(0);
+                    String decoded;
+                    try { decoded = new String(Base64.getUrlDecoder().decode(cursor), StandardCharsets.UTF_8); }
+                    catch (IllegalArgumentException ex) { throw new IllegalArgumentException("游标格式错误", ex); }
+                    statement.setObject(parameter++, convert(decoded, table.columns.get(key).jdbcType));
+                }
                 statement.setInt(parameter++, actualSize + 1);
-                statement.setInt(parameter, page * actualSize);
+                if (!keyset || (page > 0 && (cursor == null || cursor.isEmpty())))
+                    statement.setInt(parameter, page * actualSize);
                 statement.setQueryTimeout(30);
                 try (ResultSet rs = statement.executeQuery()) {
                     while (rs.next()) {
@@ -101,6 +128,11 @@ public class DatabaseService {
             result.put("page", page);
             result.put("size", actualSize);
             result.put("hasNext", hasNext);
+            if (hasNext && keyset && !records.isEmpty()) {
+                Object lastKey = records.get(records.size() - 1).get(table.primaryKeys.get(0));
+                result.put("nextCursor", Base64.getUrlEncoder().withoutPadding()
+                        .encodeToString(String.valueOf(lastKey).getBytes(StandardCharsets.UTF_8)));
+            }
             return result;
         }
     }
@@ -191,31 +223,36 @@ public class DatabaseService {
         }
     }
 
-    public String exportCsv(String source, String namespace, String tableName, Map<String, String> filters,
-                            String sort, boolean descending) throws SQLException {
+    public void writeCsv(OutputStream output, String source, String namespace, String tableName,
+                         Map<String, String> filters, String sort, boolean descending) throws SQLException, IOException {
         int limit = Math.max(1, Math.min(properties.getExportMaxRows(), 100000));
-        StringBuilder csv = new StringBuilder("\uFEFF");
+        Writer writer = new OutputStreamWriter(output, StandardCharsets.UTF_8);
         int page = 0, count = 0;
+        String cursor = null;
+        final int size = Math.min(500, Math.max(1, Math.min(1000, properties.getMaxPageSize())));
         while (count < limit) {
-            int size = Math.min(500, limit);
-            Map<String, Object> result = rows(source, namespace, tableName, page++, size, filters, sort, descending);
+            Map<String, Object> result = rows(source, namespace, tableName, page++, size,
+                    filters, sort, descending, cursor);
             @SuppressWarnings("unchecked") List<Map<String, Object>> columns = (List<Map<String, Object>>) result.get("columns");
             @SuppressWarnings("unchecked") List<Map<String, Object>> records = (List<Map<String, Object>>) result.get("rows");
             if (count == 0) {
+                writer.write('\uFEFF');
                 List<String> names = new ArrayList<>();
                 for (Map<String, Object> column : columns) names.add(csvCell(column.get("name")));
-                csv.append(String.join(",", names)).append("\r\n");
+                writer.write(String.join(",", names)); writer.write("\r\n");
             }
             for (Map<String, Object> record : records) {
                 if (count >= limit) break;
                 List<String> cells = new ArrayList<>();
                 for (Map<String, Object> column : columns) cells.add(csvCell(record.get(column.get("name"))));
-                csv.append(String.join(",", cells)).append("\r\n");
+                writer.write(String.join(",", cells)); writer.write("\r\n");
                 count++;
             }
+            writer.flush();
             if (!(Boolean) result.get("hasNext") || records.isEmpty()) break;
+            cursor = (String) result.get("nextCursor");
         }
-        return csv.toString();
+        writer.flush();
     }
 
     private String csvCell(Object value) {
