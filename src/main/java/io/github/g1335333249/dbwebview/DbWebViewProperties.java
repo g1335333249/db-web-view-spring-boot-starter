@@ -20,7 +20,6 @@ public class DbWebViewProperties {
     private int loginWindowSeconds = 300;
     private String jwtSecret;
     private int jwtTtlSeconds = 12 * 3600;
-    private String cookiePath;
     private String username;
     private String password;
     private int pageSize = 50;
@@ -60,8 +59,6 @@ public class DbWebViewProperties {
     public void setJwtSecret(String jwtSecret) { this.jwtSecret = jwtSecret; }
     public int getJwtTtlSeconds() { return jwtTtlSeconds; }
     public void setJwtTtlSeconds(int jwtTtlSeconds) { this.jwtTtlSeconds = jwtTtlSeconds; }
-    public String getCookiePath() { return cookiePath; }
-    public void setCookiePath(String cookiePath) { this.cookiePath = cookiePath; }
     public String getUsername() { return username; }
     public void setUsername(String username) { this.username = username; }
     public String getPassword() { return password; }

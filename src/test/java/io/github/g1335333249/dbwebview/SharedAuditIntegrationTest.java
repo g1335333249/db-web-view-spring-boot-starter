@@ -10,7 +10,6 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
-import javax.servlet.http.Cookie;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -34,18 +33,16 @@ class SharedAuditIntegrationTest {
         MvcResult login = mvc.perform(post("/db-web-view/api/login").contentType("application/json")
                 .content("{\"username\":\"admin\",\"password\":\"secret\"}"))
                 .andExpect(status().isOk()).andReturn();
-        String csrf = mapper.readTree(login.getResponse().getContentAsString()).get("csrf").asText();
-        String token = login.getResponse().getHeader("Set-Cookie").split(";", 2)[0].split("=", 2)[1];
-        Cookie cookie = new Cookie("DBWV_AUTH", token);
-        mvc.perform(post("/db-web-view/api/sql").cookie(cookie).header("X-DB-Web-View-CSRF", csrf)
+        String token = mapper.readTree(login.getResponse().getContentAsString()).get("token").asText();
+        mvc.perform(post("/db-web-view/api/sql").header("Authorization", "Bearer " + token)
                 .contentType("application/json")
                 .content("{\"source\":\"dataSource\",\"sql\":\"SELECT 1\"}"))
                 .andExpect(status().isOk());
-        MvcResult audit = mvc.perform(get("/db-web-view/api/audit").cookie(cookie))
+        MvcResult audit = mvc.perform(get("/db-web-view/api/audit").header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk()).andReturn();
         assertTrue(audit.getResponse().getContentAsString().contains("resultSet"));
-        mvc.perform(post("/db-web-view/api/logout").cookie(cookie).header("X-DB-Web-View-CSRF", csrf))
+        mvc.perform(post("/db-web-view/api/logout").header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk());
-        mvc.perform(get("/db-web-view/api/sources").cookie(cookie)).andExpect(status().isUnauthorized());
+        mvc.perform(get("/db-web-view/api/sources").header("Authorization", "Bearer " + token)).andExpect(status().isUnauthorized());
     }
 }

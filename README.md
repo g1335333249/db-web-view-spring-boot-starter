@@ -9,7 +9,7 @@
 3. 设置 `db-web-view.username`、`password` 和至少 32 字节的 `jwt-secret`。使用环境变量或 Kubernetes Secret 注入真实值；`application.yml`、`application-dev.yml`、`application-prod.yml` 均可。确认目标 profile 已激活。
 4. 启动宿主应用，访问 `/db-web-view/` 并登录。普通浏览、CRUD、SQL 执行**不需要创建任何本 starter 专用数据表**；它读取应用现有数据表。需要修改/删除时，目标表必须有主键，数据库账号必须具备对应权限。
 5. 多 Pod 或需要持久化审计、跨 Pod 取消 SQL 时，按“共享审计数据源”一节另外准备一个所有 Pod 共用的 MySQL/PostgreSQL 数据源，并创建 **4 张** `dbwv_*` 表。这是唯一的 starter 建表步骤；已有部署从 3 张表升级时只需新增 `dbwv_sql_execution`。
-6. 若宿主启用了 Spring Security，放行 `/db-web-view/**` 并排除该路径的宿主 CSRF 校验；本 starter 自己验证 JWT 和 CSRF。生产环境通过 HTTPS 访问，代理正确传递协议头。
+6. 若宿主启用了 Spring Security，放行 `/db-web-view/**` 并排除该路径的宿主 CSRF 校验；本 starter 自己验证 Bearer JWT。生产环境通过 HTTPS 访问，并确认代理转发 `Authorization` 请求头。
 
 ## 引入
 
@@ -31,8 +31,6 @@ db-web-view:
   password: ${DB_WEB_VIEW_PASSWORD}
   jwt-secret: ${DB_WEB_VIEW_JWT_SECRET}
   jwt-ttl-seconds: 43200
-  # 可选：Ingress 对外路径与应用内部 context path 不同时设置，例如 /gateway/db-web-view
-  # cookie-path: /gateway/db-web-view
   enabled: true
   read-only: false
   sql-enabled: true
@@ -72,28 +70,23 @@ spring:
           password: ${REPORT_DB_PASSWORD}
 ```
 
-页面的数据源列表会出现 `master` 和 `report`。推荐使用 HTTPS、受控网络与最小权限数据库账号。反向代理需传递 `X-Forwarded-Proto: https`，以便认证 Cookie 带上 `Secure` 属性。若宿主应用启用了 Spring Security，需允许 `/db-web-view/**` 进入本 starter，并避免宿主 CSRF 规则拦截这些路径；本 starter 对 API 自行执行会话认证与 CSRF 校验。
+页面的数据源列表会出现 `master` 和 `report`。生产环境必须通过 HTTPS 和受控网络访问，并使用最小权限数据库账号。若宿主应用启用了 Spring Security，需允许 `/db-web-view/**` 进入本 starter，并避免宿主 CSRF 规则拦截这些路径；本 starter 使用 Bearer JWT 验证 API，不依赖浏览器 Cookie。
 
-### K8s / Ingress 登录成功后立即 401
+### K8s / Ingress 登录后鉴权
 
-浏览器收到 `login` 的 `csrf` JSON 不代表认证已保存。认证保存在响应头 `Set-Cookie: DBWV_AUTH=...`，下一次请求必须带上 `Cookie: DBWV_AUTH=...`。在浏览器开发者工具 Network 中检查：
+`POST /db-web-view/api/login` 返回 JSON `token`，页面将其存入当前标签页的 `sessionStorage`。之后所有 API 请求（包括表格 CSV 导出）显式携带 `Authorization: Bearer <token>`。刷新页面后仍可登录，关闭标签页后需重新登录；`/api/session` 用于刷新页面时验证令牌。临近过期时服务端在 `X-DB-Web-View-Token` 响应头返回续期令牌，页面会更新存储。退出登录时清除标签页令牌；配置共享审计库后还会跨 Pod 撤销令牌。
 
-1. `login` **响应头**是否包含 `Set-Cookie`。如果没有，检查 Ingress、网关或代理是否过滤了该响应头。
-2. `Set-Cookie` 的 `Path` 是否为 `settings` 请求 URL 的路径前缀。例如公开接口为 `/gateway/db-web-view/api/settings`，但后端只看到 `/db-web-view` 并设置 `Path=/db-web-view`，浏览器就不会发送 Cookie。此时配置 `db-web-view.cookie-path: /gateway/db-web-view`。该值填写浏览器地址栏中的**公开页面路径**，去掉结尾斜杠，必须以 `/db-web-view` 结尾。所有 Pod 应配置相同值。不要填写 Pod 内部的 `contextPath`。
-3. 若 Cookie 带 `Secure`，公开页面必须通过 HTTPS 访问；若浏览器使用 HTTP 而代理发送了错误的 `X-Forwarded-Proto: https`，浏览器不会在后续 HTTP 请求发送该 Cookie。检查 Ingress 的 TLS 终止与转发头。`SameSite=Lax` 要求同站点使用；不要把页面嵌入跨站 iframe。
-4. 查看 Network 的 Cookies/Issues 中浏览器拒收原因。若 Cookie 已随 `settings` 请求发送但仍返回 401，再核对各 Pod 的 `jwt-secret`、`username`、`jwt-ttl-seconds` 是否一致，并确认网关没有过滤请求的 `Cookie` 头。
-
-例如公开访问地址为 `http://host/szqdzx-api/szhqdzx/db-web-view/`、应用内部的 `contextPath` 为 `/szhqdzx`，则应设置 `cookie-path: /szqdzx-api/szhqdzx/db-web-view`。即使页面和 `login` 都正常显示，只要响应中的 Cookie Path 少了 `/szqdzx-api`，后续 `settings`、`session` 就不会携带登录 Cookie。
+Ingress 对外增加路径前缀时无需配置 Cookie Path。例如公开页面为 `/szqdzx-api/szhqdzx/db-web-view/`、后端内部路径为 `/szhqdzx/db-web-view/`，只要网关转发 `Authorization` 请求头即可。若 `login` 返回令牌，但 `settings` 仍然 401，请在 Network 检查 `settings` 请求是否携带 Bearer 头，以及所有 Pod 的 `jwt-secret`、`username`、`jwt-ttl-seconds` 是否一致。**不要将令牌放在 URL 或日志中。**
 
 单数据源项目继续使用普通的 `spring.datasource.url`、`username`、`password` 即可。MyBatis-Plus 的 `mybatis-plus.*` 配置无需改动。只要 Spring 容器中已经注册了可连接的 `DataSource`，本 starter 就会从实际连接池发现数据库；它不会解析未激活 profile 的 YAML 配置。
 
 ## Kubernetes 多 Pod 登录
 
-认证使用 HS256 签名的 JWT，存放在 `HttpOnly; SameSite=Lax` Cookie 中；页面刷新后会从 Cookie 恢复登录，不使用 `HttpSession`。所有 Pod 必须从同一个 Kubernetes Secret 获取**相同**的 `DB_WEB_VIEW_JWT_SECRET`，账号与 `jwt-ttl-seconds` 也应一致。可以用 `openssl rand -base64 48` 生成密钥。密钥轮换会使旧令牌失效，需要重新登录。
+认证使用 HS256 签名的 JWT，通过 `Authorization` 请求头传输，不使用 `HttpSession`。页面将令牌保存在当前标签页的 `sessionStorage`；同一标签页刷新后可继续登录，新开的独立标签页需要再次登录。所有 Pod 必须从同一个 Kubernetes Secret 获取**相同**的 `DB_WEB_VIEW_JWT_SECRET`，账号与 `jwt-ttl-seconds` 也应一致。可以用 `openssl rand -base64 48` 生成密钥。密钥轮换会使旧令牌失效，需要重新登录。由于 Bearer 令牌可被页面 JavaScript 访问，应严格保持默认 CSP、避免引入不可信脚本，并强制使用 HTTPS。
 
-令牌默认有效 12 小时，在剩余时间少于一半时由活跃请求续期，因此不会因原来的 30 分钟 Session 空闲超时而退出。长时间完全无操作、密钥更换或浏览器删除 Cookie 后仍需重新登录。
+令牌默认有效 12 小时，在剩余时间少于一半时由活跃请求续期，因此不会因原来的 30 分钟 Session 空闲超时而退出。长时间完全无操作、密钥更换或关闭标签页后仍需重新登录。
 
-登录失败按客户端 IP 计数，默认 5 分钟内失败 5 次后返回 HTTP 429，窗口结束后自动恢复。配置 `audit-source` 时计数和退出登录的 JWT 撤销记录由共享数据库保存，所有 Pod 即时生效；未配置时限流只在当前 Pod 生效，退出登录只清除浏览器 Cookie。如果所有请求都经过可信反向代理，可在代理清理客户端传入的 `X-Forwarded-For` 后设置 `login-trust-forwarded-for: true`，按真实客户端 IP 限流；默认使用连接的 `RemoteAddr`。Kubernetes 入口处仍建议配置请求速率限制。
+登录失败按客户端 IP 计数，默认 5 分钟内失败 5 次后返回 HTTP 429，窗口结束后自动恢复。配置 `audit-source` 时计数和退出登录的 JWT 撤销记录由共享数据库保存，所有 Pod 即时生效；未配置时限流只在当前 Pod 生效，退出登录只清除当前标签页的令牌。如果所有请求都经过可信反向代理，可在代理清理客户端传入的 `X-Forwarded-For` 后设置 `login-trust-forwarded-for: true`，按真实客户端 IP 限流；默认使用连接的 `RemoteAddr`。Kubernetes 入口处仍建议配置请求速率限制。
 
 已登录时，关闭标签页、关闭浏览器、使用关闭快捷键、刷新或离开页面会触发浏览器原生确认提示。浏览器要求页面发生过用户交互才显示提示，提示文案由浏览器决定；部分移动端场景可能不触发。
 
@@ -134,7 +127,7 @@ db-web-view:
 ## 功能与限制
 
 - 数据表最多可添加 20 个筛选条件，按 AND 组合，支持等于、不等于、包含、大于/小于、闭区间范围、为空/不为空。“包含”只适用于文本列，`%`、`_` 按普通字符匹配。筛选同样作用于表格 CSV 导出；旧版 JSON 对象等值筛选参数仍兼容。支持字段升降序排序和分页。默认的单列主键升序浏览使用游标翻页；自定义排序和无单列主键的表仍用 OFFSET。默认每页 50 条；`page-size`、`max-page-size` 可调，上限 1000。
-- 表结构页显示字段、主键、索引和外键。CSV 导出使用当前筛选与排序，边查边写，不在服务端或浏览器一次性组装完整文件，最多导出 `export-max-rows` 条，硬上限 100000 条；导出值会处理常见的表格公式前缀。
+- 表结构页显示字段、主键、索引和外键。CSV 导出使用当前筛选与排序，服务端边查边写，浏览器为附加 Bearer 头会将响应读入内存后下载；最多导出 `export-max-rows` 条，硬上限 100000 条，大表导出需留意浏览器内存。导出值会处理常见的表格公式前缀。
 - 视图只读；无主键表可以浏览和新增，但不能精确定位一行修改或删除。二进制/大对象字段显示占位文本，不能在页面编辑。
 - `read-only: true` 禁止页面增删改，SQL 窗口只接受以 `SELECT` 开头的单条语句并请求 JDBC 只读连接。**数据库账号仍需设置只读权限**，因为数据库函数等行为不能仅靠 SQL 文本判断。配置 `allowed-tables` 时，SQL 窗口自动关闭，以免绕过表白名单。
 - SQL 窗口一次执行一条语句。查询默认最多显示 200 行，超时 30 秒；`sql-max-rows` 和 `sql-timeout-seconds` 可调，硬上限 1000 行和 300 秒。“执行计划”只接受单条 `SELECT`，执行 `EXPLAIN`，不使用 `ANALYZE`。“导出当前结果 CSV”导出页面已返回的行，因此同样受 `sql-max-rows` 限制；如需大批量导出，请使用表格 CSV 导出。运行中的 SQL 可以点“取消执行”，服务端调用 JDBC `Statement.cancel()`；共享审计库启用时其他 Pod 可传递取消请求，轮询间隔约 500 毫秒。

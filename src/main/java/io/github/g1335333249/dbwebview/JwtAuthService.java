@@ -5,9 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
-import javax.servlet.http.Cookie;
 import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
@@ -18,7 +16,6 @@ import java.util.Map;
 
 /** Stateless HS256 authentication shared by all pods that use the same configured secret. */
 public class JwtAuthService {
-    static final String COOKIE_NAME = "DBWV_AUTH";
     private static final String HEADER = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
     private static final String ISSUER = "db-web-view";
     private static final Base64.Encoder ENCODER = Base64.getUrlEncoder().withoutPadding();
@@ -26,7 +23,6 @@ public class JwtAuthService {
     private final byte[] key;
     private final long ttlSeconds;
     private final String username;
-    private final String configuredCookiePath;
     private final ObjectMapper mapper = new ObjectMapper();
     private final SecureRandom random = new SecureRandom();
 
@@ -43,23 +39,19 @@ public class JwtAuthService {
             this.key = secret.getBytes(StandardCharsets.UTF_8);
         }
         this.username = properties.getUsername();
-        this.configuredCookiePath = validateCookiePath(properties.getCookiePath());
         this.ttlSeconds = Math.max(300, Math.min(7 * 24 * 3600, properties.getJwtTtlSeconds()));
     }
 
-    public String issue(HttpServletRequest request, HttpServletResponse response) {
+    public String issue() {
         byte[] id = new byte[32];
         random.nextBytes(id);
         String jti = ENCODER.encodeToString(id);
-        writeCookie(request, response, token(jti, Instant.now().getEpochSecond()), (int) ttlSeconds);
-        return csrf(jti);
+        return token(jti, Instant.now().getEpochSecond());
     }
 
     public Claims verify(HttpServletRequest request) {
-        String raw = null;
-        if (request.getCookies() != null) for (Cookie cookie : request.getCookies()) {
-            if (COOKIE_NAME.equals(cookie.getName())) { raw = cookie.getValue(); break; }
-        }
+        String authorization = request.getHeader("Authorization");
+        String raw = authorization != null && authorization.startsWith("Bearer ") ? authorization.substring(7) : null;
         if (raw == null || raw.length() > 4096) return null;
         String[] parts = raw.split("\\.", -1);
         if (parts.length != 3 || !HEADER.equals(parts[0])) return null;
@@ -79,25 +71,9 @@ public class JwtAuthService {
         } catch (RuntimeException | java.io.IOException ex) { return null; }
     }
 
-    public void refreshIfNeeded(HttpServletRequest request, HttpServletResponse response, Claims claims) {
+    public String refreshIfNeeded(Claims claims) {
         long now = Instant.now().getEpochSecond();
-        if (claims.exp - now < ttlSeconds / 2)
-            writeCookie(request, response, token(claims.jti, now), (int) ttlSeconds);
-    }
-
-    public String csrf(Claims claims) { return csrf(claims.jti); }
-
-    public boolean validCsrf(Claims claims, String provided) {
-        return provided != null && MessageDigest.isEqual(csrf(claims).getBytes(StandardCharsets.US_ASCII),
-                provided.getBytes(StandardCharsets.US_ASCII));
-    }
-
-    public void clear(HttpServletRequest request, HttpServletResponse response) {
-        writeCookie(request, response, "", 0);
-    }
-
-    private String csrf(String jti) {
-        return ENCODER.encodeToString(hmac(("csrf:" + jti).getBytes(StandardCharsets.US_ASCII)));
+        return claims.exp - now < ttlSeconds / 2 ? token(claims.jti, now) : null;
     }
 
     private String token(String jti, long now) {
@@ -119,21 +95,6 @@ public class JwtAuthService {
         } catch (java.security.GeneralSecurityException ex) { throw new IllegalStateException("HMAC 不可用", ex); }
     }
 
-    private void writeCookie(HttpServletRequest request, HttpServletResponse response, String value, int maxAge) {
-        String path = configuredCookiePath == null ? request.getContextPath() + "/db-web-view" : configuredCookiePath;
-        boolean secure = request.isSecure() || "https".equalsIgnoreCase(request.getHeader("X-Forwarded-Proto"));
-        String cookie = COOKIE_NAME + "=" + value + "; Path=" + path + "; Max-Age=" + maxAge
-                + "; HttpOnly; SameSite=Lax" + (secure ? "; Secure" : "");
-        response.addHeader("Set-Cookie", cookie);
-    }
-
-    private String validateCookiePath(String path) {
-        if (path == null || path.isEmpty()) return null;
-        if (!path.startsWith("/") || path.endsWith("/") || !path.endsWith("/db-web-view")
-                || path.contains("//") || !path.matches("/[A-Za-z0-9_./~-]+"))
-            throw new IllegalStateException("db-web-view.cookie-path 必须是以 /db-web-view 结尾的公开绝对路径");
-        return path;
-    }
 
     private String text(JsonNode node, String name) {
         JsonNode value = node.get(name);

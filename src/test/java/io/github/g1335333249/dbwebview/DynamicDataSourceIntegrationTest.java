@@ -1,12 +1,12 @@
 package io.github.g1335333249.dbwebview;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
-import javax.servlet.http.Cookie;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
@@ -33,6 +33,7 @@ class DynamicDataSourceIntegrationTest {
     static class App { }
 
     @Autowired MockMvc mvc;
+    @Autowired ObjectMapper mapper;
 
     @Test
     void sourcesRemainAvailableAfterReloadingSession() throws Exception {
@@ -40,12 +41,11 @@ class DynamicDataSourceIntegrationTest {
                 .contentType("application/json")
                 .content("{\"username\":\"admin\",\"password\":\"secret\"}"))
                 .andExpect(status().isOk()).andReturn();
-        String token = login.getResponse().getHeader("Set-Cookie").split(";", 2)[0].split("=", 2)[1];
-        Cookie cookie = new Cookie("DBWV_AUTH", token);
-        mvc.perform(get("/db-web-view/api/session").cookie(cookie)).andExpect(status().isOk());
-        mvc.perform(get("/db-web-view/api/sources").cookie(cookie)).andExpect(status().isOk())
+        String token = mapper.readTree(login.getResponse().getContentAsString()).get("token").asText();
+        mvc.perform(get("/db-web-view/api/session").header("Authorization", "Bearer " + token)).andExpect(status().isOk());
+        mvc.perform(get("/db-web-view/api/sources").header("Authorization", "Bearer " + token)).andExpect(status().isOk())
                 .andExpect(content().string(containsString("szqdpt")));
-        mvc.perform(get("/db-web-view/api/tables").cookie(cookie).param("source", "szqdpt"))
+        mvc.perform(get("/db-web-view/api/tables").header("Authorization", "Bearer " + token).param("source", "szqdpt"))
                 .andExpect(status().isOk());
     }
 }

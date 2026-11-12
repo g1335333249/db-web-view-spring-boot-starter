@@ -36,13 +36,11 @@ public class DbWebViewAuthFilter extends OncePerRequestFilter {
         try {
             if (auditStore.revoked(claims.jti)) { reject(response, 401, "登录已失效"); return; }
         } catch (java.sql.SQLException ex) { reject(response, 503, "认证存储不可用"); return; }
-        if (!"GET".equals(request.getMethod()) && !"HEAD".equals(request.getMethod())
-                && !jwt.validCsrf(claims, request.getHeader("X-DB-Web-View-CSRF"))) {
-            reject(response, 403, "CSRF 校验失败");
-            return;
-        }
         request.setAttribute(CLAIMS, claims);
-        if (!"/db-web-view/api/logout".equals(path)) jwt.refreshIfNeeded(request, response, claims);
+        if (!"/db-web-view/api/logout".equals(path)) {
+            String refreshed = jwt.refreshIfNeeded(claims);
+            if (refreshed != null) response.setHeader("X-DB-Web-View-Token", refreshed);
+        }
         chain.doFilter(request, response);
     }
 

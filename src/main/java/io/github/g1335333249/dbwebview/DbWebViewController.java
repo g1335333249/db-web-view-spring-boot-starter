@@ -63,7 +63,7 @@ public class DbWebViewController {
     }
 
     @PostMapping("/api/login")
-    public Map<String, Object> login(@RequestBody Map<String, String> body, HttpServletRequest request, HttpServletResponse response) throws SQLException {
+    public Map<String, Object> login(@RequestBody Map<String, String> body, HttpServletRequest request) throws SQLException {
         ensureConfigured();
         String ip = clientIp(request);
         if (auditStore.tooManyFailures(ip)) throw new TooManyRequestsException("登录失败次数过多，请稍后再试");
@@ -75,20 +75,19 @@ public class DbWebViewController {
         }
         auditStore.successfulLogin(ip);
         log.info("DB Web View login succeeded from {}", ip);
-        return Collections.singletonMap("csrf", jwt.issue(request, response));
+        return Collections.singletonMap("token", jwt.issue());
     }
 
     @GetMapping("/api/session")
     public Map<String, Object> session(HttpServletRequest request) {
         JwtAuthService.Claims claims = (JwtAuthService.Claims) request.getAttribute(DbWebViewAuthFilter.CLAIMS);
-        return Collections.singletonMap("csrf", jwt.csrf(claims));
+        return Collections.singletonMap("authenticated", true);
     }
 
     @PostMapping("/api/logout")
-    public Map<String, Object> logout(HttpServletRequest request, HttpServletResponse response) throws SQLException {
+    public Map<String, Object> logout(HttpServletRequest request) throws SQLException {
         JwtAuthService.Claims claims = (JwtAuthService.Claims) request.getAttribute(DbWebViewAuthFilter.CLAIMS);
-        try { auditStore.revoke(claims.jti, claims.exp); }
-        finally { jwt.clear(request, response); }
+        auditStore.revoke(claims.jti, claims.exp);
         return Collections.singletonMap("ok", true);
     }
 

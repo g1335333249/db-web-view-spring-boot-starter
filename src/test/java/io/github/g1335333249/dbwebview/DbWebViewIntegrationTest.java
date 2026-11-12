@@ -10,7 +10,6 @@ import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
-import javax.servlet.http.Cookie;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
@@ -45,7 +44,7 @@ class DbWebViewIntegrationTest {
     }
 
     @Test
-    void loginCsrfAndCrud() throws Exception {
+    void loginBearerAndCrud() throws Exception {
         mvc.perform(get("/db-web-view")).andExpect(status().isFound());
         mvc.perform(get("/db-web-view/")).andExpect(status().isOk())
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("DB Web View")));
@@ -58,63 +57,63 @@ class DbWebViewIntegrationTest {
         MvcResult login = mvc.perform(post("/db-web-view/api/login").contentType("application/json")
                 .content("{\"username\":\"admin\",\"password\":\"secret\"}"))
                 .andExpect(status().isOk()).andReturn();
-        Cookie cookie = cookie(login);
-        String csrf = mapper.readTree(login.getResponse().getContentAsString()).get("csrf").asText();
-        mvc.perform(get("/db-web-view/api/session").cookie(cookie)).andExpect(status().isOk())
-                .andExpect(content().string(org.hamcrest.Matchers.containsString(csrf)));
-        JsonNode sources = mapper.readTree(mvc.perform(get("/db-web-view/api/sources").cookie(cookie))
+        String token = token(login);
+        mvc.perform(get("/db-web-view/api/session").header("Cookie", "DBWV_AUTH=" + token))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(get("/db-web-view/api/session").header("Authorization", "Bearer " + token)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.authenticated").value(true));
+        JsonNode sources = mapper.readTree(mvc.perform(get("/db-web-view/api/sources").header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
         String source = sources.get("sources").get(0).asText();
-        JsonNode tables = mapper.readTree(mvc.perform(get("/db-web-view/api/tables").cookie(cookie).param("source", source))
+        JsonNode tables = mapper.readTree(mvc.perform(get("/db-web-view/api/tables").header("Authorization", "Bearer " + token).param("source", source))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
         assertTrue(tables.get("tables").toString().contains("ITEMS"));
 
         String target = "{\"source\":\"" + source + "\",\"namespace\":\"PUBLIC\",\"table\":\"ITEMS\"";
-        JsonNode page = mapper.readTree(mvc.perform(get("/db-web-view/api/rows").cookie(cookie)
+        JsonNode page = mapper.readTree(mvc.perform(get("/db-web-view/api/rows").header("Authorization", "Bearer " + token)
                 .param("source", source).param("namespace", "PUBLIC").param("table", "ITEMS"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
         assertEquals("first", page.get("rows").get(0).get("NAME").asText());
         assertEquals("ID", page.get("primaryKeys").get(0).asText());
         String sqlBody = "{\"source\":\"" + source + "\",\"sql\":\"SELECT NAME FROM ITEMS WHERE ID = 1;\"}";
-        mvc.perform(post("/db-web-view/api/sql").cookie(cookie).contentType("application/json")
-                .content(sqlBody)).andExpect(status().isForbidden());
-        JsonNode sqlResult = mapper.readTree(mvc.perform(post("/db-web-view/api/sql").cookie(cookie)
-                .header("X-DB-Web-View-CSRF", csrf).contentType("application/json").content(sqlBody))
+        mvc.perform(post("/db-web-view/api/sql").contentType("application/json")
+                .content(sqlBody)).andExpect(status().isUnauthorized());
+        JsonNode sqlResult = mapper.readTree(mvc.perform(post("/db-web-view/api/sql").header("Authorization", "Bearer " + token)
+                .contentType("application/json").content(sqlBody))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
         assertEquals("resultSet", sqlResult.get("kind").asText());
         assertEquals("first", sqlResult.get("rows").get(0).get(0).asText());
-        mvc.perform(post("/db-web-view/api/sql").cookie(cookie).header("X-DB-Web-View-CSRF", csrf)
+        mvc.perform(post("/db-web-view/api/sql").header("Authorization", "Bearer " + token)
                 .contentType("application/json").content("{\"source\":\"" + source
                         + "\",\"sql\":\"SELECT 1; DELETE FROM ITEMS\"}"))
                 .andExpect(status().isBadRequest());
-        mvc.perform(post("/db-web-view/api/rows").cookie(cookie).contentType("application/json")
+        mvc.perform(post("/db-web-view/api/rows").contentType("application/json")
                 .content(target + ",\"values\":{\"ID\":2,\"NAME\":\"second\"}}"))
-                .andExpect(status().isForbidden());
-        mvc.perform(post("/db-web-view/api/rows").cookie(cookie).header("X-DB-Web-View-CSRF", csrf)
+                .andExpect(status().isUnauthorized());
+        mvc.perform(post("/db-web-view/api/rows").header("Authorization", "Bearer " + token)
                 .contentType("application/json").content(target + ",\"values\":{\"ID\":2,\"NAME\":\"second\"}}"))
                 .andExpect(status().isOk());
         assertEquals("second", jdbc.queryForObject("SELECT NAME FROM ITEMS WHERE ID=2", String.class));
 
-        mvc.perform(put("/db-web-view/api/rows").cookie(cookie).header("X-DB-Web-View-CSRF", csrf)
+        mvc.perform(put("/db-web-view/api/rows").header("Authorization", "Bearer " + token)
                 .contentType("application/json").content(target + ",\"keys\":{\"ID\":2},\"values\":{\"NAME\":\"updated\"}}"))
                 .andExpect(status().isOk());
         assertEquals("updated", jdbc.queryForObject("SELECT NAME FROM ITEMS WHERE ID=2", String.class));
 
-        JsonNode updateSqlResult = mapper.readTree(mvc.perform(post("/db-web-view/api/sql").cookie(cookie)
-                .header("X-DB-Web-View-CSRF", csrf).contentType("application/json")
+        JsonNode updateSqlResult = mapper.readTree(mvc.perform(post("/db-web-view/api/sql").header("Authorization", "Bearer " + token)
+                .contentType("application/json")
                 .content("{\"source\":\"" + source + "\",\"sql\":\"UPDATE ITEMS SET NAME = 'via SQL' WHERE ID = 2\"}"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
         assertEquals("update", updateSqlResult.get("kind").asText());
         assertEquals(1, updateSqlResult.get("affected").asInt());
         assertEquals("via SQL", jdbc.queryForObject("SELECT NAME FROM ITEMS WHERE ID=2", String.class));
 
-        mvc.perform(delete("/db-web-view/api/rows").cookie(cookie).header("X-DB-Web-View-CSRF", csrf)
+        mvc.perform(delete("/db-web-view/api/rows").header("Authorization", "Bearer " + token)
                 .contentType("application/json").content(target + ",\"keys\":{\"ID\":2}}"))
                 .andExpect(status().isOk());
         assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM ITEMS WHERE ID=2", Integer.class));
-        mvc.perform(post("/db-web-view/api/logout").cookie(cookie).header("X-DB-Web-View-CSRF", csrf))
-                .andExpect(status().isOk())
-                .andExpect(header().string("Set-Cookie", org.hamcrest.Matchers.containsString("Max-Age=0")));
+        mvc.perform(post("/db-web-view/api/logout").header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk());
     }
     @Test
     void filterSortStructureExportAndHistory() throws Exception {
@@ -122,31 +121,30 @@ class DbWebViewIntegrationTest {
         MvcResult login = mvc.perform(post("/db-web-view/api/login").contentType("application/json")
                 .content("{\"username\":\"admin\",\"password\":\"secret\"}"))
                 .andExpect(status().isOk()).andReturn();
-        Cookie cookie = cookie(login);
-        String csrf = mapper.readTree(login.getResponse().getContentAsString()).get("csrf").asText();
-        String source = mapper.readTree(mvc.perform(get("/db-web-view/api/sources").cookie(cookie))
+        String token = token(login);
+        String source = mapper.readTree(mvc.perform(get("/db-web-view/api/sources").header("Authorization", "Bearer " + token))
                 .andReturn().getResponse().getContentAsString()).get("sources").get(0).asText();
-        JsonNode filtered = mapper.readTree(mvc.perform(get("/db-web-view/api/rows").cookie(cookie)
+        JsonNode filtered = mapper.readTree(mvc.perform(get("/db-web-view/api/rows").header("Authorization", "Bearer " + token)
                 .param("source", source).param("namespace", "PUBLIC").param("table", "ITEMS")
                 .param("filters", "{\"NAME\":\"second\"}").param("sort", "ID").param("descending", "true"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
         assertEquals(1, filtered.get("rows").size());
         assertEquals(2, filtered.get("rows").get(0).get("ID").asInt());
-        mvc.perform(get("/db-web-view/api/rows").cookie(cookie).param("source", source)
+        mvc.perform(get("/db-web-view/api/rows").header("Authorization", "Bearer " + token).param("source", source)
                 .param("namespace", "PUBLIC").param("table", "ITEMS").param("sort", "MISSING"))
                 .andExpect(status().isBadRequest());
-        JsonNode structure = mapper.readTree(mvc.perform(get("/db-web-view/api/structure").cookie(cookie)
+        JsonNode structure = mapper.readTree(mvc.perform(get("/db-web-view/api/structure").header("Authorization", "Bearer " + token)
                 .param("source", source).param("namespace", "PUBLIC").param("table", "ITEMS"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
         assertEquals("ID", structure.get("primaryKeys").get(0).asText());
-        mvc.perform(get("/db-web-view/api/export").cookie(cookie).param("source", source)
+        mvc.perform(get("/db-web-view/api/export").header("Authorization", "Bearer " + token).param("source", source)
                 .param("namespace", "PUBLIC").param("table", "ITEMS").param("filters", "{\"NAME\":\"second\"}"))
                 .andExpect(status().isOk())
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("second")));
-        mvc.perform(post("/db-web-view/api/sql").cookie(cookie).header("X-DB-Web-View-CSRF", csrf)
+        mvc.perform(post("/db-web-view/api/sql").header("Authorization", "Bearer " + token)
                 .contentType("application/json").content("{\"source\":\"" + source + "\",\"sql\":\"SELECT COUNT(*) FROM ITEMS\"}"))
                 .andExpect(status().isOk());
-        JsonNode history = mapper.readTree(mvc.perform(get("/db-web-view/api/sql/history").cookie(cookie))
+        JsonNode history = mapper.readTree(mvc.perform(get("/db-web-view/api/sql/history").header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
         assertTrue(history.get("history").size() > 0);
         assertFalse(history.get("history").get(0).has("sql"));
@@ -159,17 +157,17 @@ class DbWebViewIntegrationTest {
         MvcResult login = mvc.perform(post("/db-web-view/api/login").contentType("application/json")
                 .content("{\"username\":\"admin\",\"password\":\"secret\"}"))
                 .andExpect(status().isOk()).andReturn();
-        Cookie cookie = cookie(login);
-        String source = mapper.readTree(mvc.perform(get("/db-web-view/api/sources").cookie(cookie))
+        String token = token(login);
+        String source = mapper.readTree(mvc.perform(get("/db-web-view/api/sources").header("Authorization", "Bearer " + token))
                 .andReturn().getResponse().getContentAsString()).get("sources").get(0).asText();
-        JsonNode first = mapper.readTree(mvc.perform(get("/db-web-view/api/rows").cookie(cookie)
+        JsonNode first = mapper.readTree(mvc.perform(get("/db-web-view/api/rows").header("Authorization", "Bearer " + token)
                 .param("source", source).param("namespace", "PUBLIC").param("table", "ITEMS")
                 .param("page", "0").param("size", "1"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
         assertEquals(1, first.get("rows").get(0).get("ID").asInt());
         String cursor = first.get("nextCursor").asText();
         jdbc.execute("DELETE FROM ITEMS WHERE ID=1");
-        JsonNode second = mapper.readTree(mvc.perform(get("/db-web-view/api/rows").cookie(cookie)
+        JsonNode second = mapper.readTree(mvc.perform(get("/db-web-view/api/rows").header("Authorization", "Bearer " + token)
                 .param("source", source).param("namespace", "PUBLIC").param("table", "ITEMS")
                 .param("page", "1").param("size", "1").param("cursor", cursor))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
@@ -227,11 +225,10 @@ class DbWebViewIntegrationTest {
         MvcResult login = mvc.perform(post("/db-web-view/api/login").contentType("application/json")
                 .content("{\"username\":\"admin\",\"password\":\"secret\"}"))
                 .andExpect(status().isOk()).andReturn();
-        Cookie cookie = cookie(login);
-        String csrf = mapper.readTree(login.getResponse().getContentAsString()).get("csrf").asText();
-        String source = mapper.readTree(mvc.perform(get("/db-web-view/api/sources").cookie(cookie))
+        String token = token(login);
+                String source = mapper.readTree(mvc.perform(get("/db-web-view/api/sources").header("Authorization", "Bearer " + token))
                 .andReturn().getResponse().getContentAsString()).get("sources").get(0).asText();
-        JsonNode filtered = mapper.readTree(mvc.perform(get("/db-web-view/api/rows").cookie(cookie)
+        JsonNode filtered = mapper.readTree(mvc.perform(get("/db-web-view/api/rows").header("Authorization", "Bearer " + token)
                 .param("source", source).param("namespace", "PUBLIC").param("table", "ITEMS")
                 .param("filters", "[{\"column\":\"NAME\",\"operator\":\"contains\",\"value\":\"fir\"}]")
                 .param("page", "0"))
@@ -240,20 +237,16 @@ class DbWebViewIntegrationTest {
         java.util.Map<String, String> explain = new java.util.LinkedHashMap<>();
         explain.put("source", source);
         explain.put("sql", "SELECT * FROM ITEMS");
-        mvc.perform(post("/db-web-view/api/sql/explain").cookie(cookie)
-                .header("X-DB-Web-View-CSRF", csrf).contentType("application/json")
+        mvc.perform(post("/db-web-view/api/sql/explain").header("Authorization", "Bearer " + token)
+                .contentType("application/json")
                 .content(mapper.writeValueAsString(explain)))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.kind").value("resultSet"));
     }
 
-    private Cookie cookie(MvcResult login) {
-        String header = login.getResponse().getHeader("Set-Cookie");
-        assertNotNull(header);
-        assertTrue(header.contains("HttpOnly"));
-        assertTrue(header.contains("SameSite=Lax"));
+    private String token(MvcResult login) throws Exception {
+        assertNull(login.getResponse().getHeader("Set-Cookie"));
         assertNull(login.getRequest().getSession(false));
-        String[] pair = header.split(";", 2)[0].split("=", 2);
-        return new Cookie(pair[0], pair[1]);
+        return mapper.readTree(login.getResponse().getContentAsString()).get("token").asText();
     }
 
 }

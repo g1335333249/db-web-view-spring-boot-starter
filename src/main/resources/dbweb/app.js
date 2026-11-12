@@ -1,12 +1,14 @@
 (() => {
   const $ = id => document.getElementById(id);
-  const state = {csrf:null,source:null,table:null,tables:[],page:0,data:null,view:'table',filters:[],sort:'',descending:false,settings:{},cursor:null,cursorStack:[],sqlResult:null,executionId:null};
+  const state = {token:sessionStorage.getItem('DBWV_TOKEN'),source:null,table:null,tables:[],page:0,data:null,view:'table',filters:[],sort:'',descending:false,settings:{},cursor:null,cursorStack:[],sqlResult:null,executionId:null};
   const base = location.pathname.replace(/\/$/, '') + '/api';
   const qs = data => '?' + new URLSearchParams(data).toString();
   async function api(path, options={}) {
     const headers = {'Content-Type':'application/json'};
-    if (state.csrf && options.method && options.method !== 'GET') headers['X-DB-Web-View-CSRF'] = state.csrf;
-    const response = await fetch(base + path, {credentials:'same-origin',headers,...options});
+    if (state.token && path !== '/login') headers.Authorization = 'Bearer ' + state.token;
+    const response = await fetch(base + path, {credentials:'omit',headers,...options});
+    const refreshed = response.headers.get('X-DB-Web-View-Token');
+    if (refreshed) { state.token = refreshed; sessionStorage.setItem('DBWV_TOKEN', refreshed); }
     let body;
     try { body = await response.json(); } catch (_) { body = {}; }
     if (!response.ok) {
@@ -21,7 +23,7 @@
     clearTimeout(toast.timer);
     toast.timer = setTimeout(() => $('toast').classList.add('hidden'), 3500);
   }
-  function showLogin() { state.csrf = null; $('app').classList.add('hidden'); $('login').classList.remove('hidden'); }
+  function showLogin() { state.token = null; sessionStorage.removeItem('DBWV_TOKEN'); $('app').classList.add('hidden'); $('login').classList.remove('hidden'); }
   function showApp() { $('login').classList.add('hidden'); $('app').classList.remove('hidden'); }
   function switchView(view) {
     state.view = view;
@@ -37,7 +39,8 @@
   }
   async function start() {
     try {
-      state.csrf = (await api('/session')).csrf;
+      if (!state.token) { showLogin(); return; }
+      await api('/session');
     } catch (_) { showLogin(); return; }
     showApp();
     try { await loadSettings(); await loadSources(); }
@@ -260,10 +263,11 @@
   $('login-form').onsubmit = async event => {
     event.preventDefault(); $('login-error').textContent = '';
     try {
-      state.csrf = (await api('/login', {method:'POST',body:JSON.stringify({username:$('username').value,password:$('password').value})})).csrf;
+      state.token = (await api('/login', {method:'POST',body:JSON.stringify({username:$('username').value,password:$('password').value})})).token;
+      sessionStorage.setItem('DBWV_TOKEN', state.token);
       $('password').value = ''; showApp();
     } catch (error) { $('login-error').textContent = error.message; }
-    if (state.csrf) {
+    if (state.token) {
       try { await loadSettings(); await loadSources(); }
       catch (error) { $('table-list').textContent = '数据源加载失败，点击刷新重试'; toast(error.message); }
     }
@@ -297,13 +301,25 @@
       panel.classList.toggle('hidden');
     } catch(e) { toast(e.message); }
   };
-  $('export').onclick = () => {
+  $('export').onclick = async () => {
     if (!state.table) return;
     const t = state.table;
-    const a = document.createElement('a');
-    a.href = base + '/export' + qs({source:state.source,namespace:t.namespace,table:t.name,filters:JSON.stringify(state.filters),sort:state.sort,descending:state.descending});
-    a.download = t.name + '.csv';
-    document.body.append(a); a.click(); a.remove();
+    const button = $('export'); button.disabled = true;
+    try {
+      const response = await fetch(base + '/export' + qs({source:state.source,namespace:t.namespace,table:t.name,filters:JSON.stringify(state.filters),sort:state.sort,descending:state.descending}),
+        {credentials:'omit',headers:{Authorization:'Bearer ' + state.token}});
+      const refreshed = response.headers.get('X-DB-Web-View-Token');
+      if (refreshed) { state.token = refreshed; sessionStorage.setItem('DBWV_TOKEN', refreshed); }
+      if (!response.ok) {
+        if (response.status === 401) showLogin();
+        let error; try { error = (await response.json()).error; } catch (_) { /* CSV error body may be empty */ }
+        throw new Error(error || `导出失败 (${response.status})`);
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a'); link.href = url; link.download = t.name + '.csv';
+      document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch(e) { toast(e.message); }
+    finally { button.disabled = false; }
   };
   $('refresh-history').onclick = loadHistory;
   $('add').onclick = () => openEditor();
@@ -330,7 +346,7 @@
   };
   $('sql-input').onkeydown = event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); runSql(); } };
   window.addEventListener('beforeunload', event => {
-    if (!state.csrf) return;
+    if (!state.token) return;
     event.preventDefault();
     event.returnValue = true;
   });
