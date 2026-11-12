@@ -31,6 +31,8 @@ db-web-view:
   password: ${DB_WEB_VIEW_PASSWORD}
   jwt-secret: ${DB_WEB_VIEW_JWT_SECRET}
   jwt-ttl-seconds: 43200
+  # 可选：Ingress 对外路径与应用内部 context path 不同时设置，例如 /gateway/db-web-view
+  # cookie-path: /gateway/db-web-view
   enabled: true
   read-only: false
   sql-enabled: true
@@ -71,6 +73,17 @@ spring:
 ```
 
 页面的数据源列表会出现 `master` 和 `report`。推荐使用 HTTPS、受控网络与最小权限数据库账号。反向代理需传递 `X-Forwarded-Proto: https`，以便认证 Cookie 带上 `Secure` 属性。若宿主应用启用了 Spring Security，需允许 `/db-web-view/**` 进入本 starter，并避免宿主 CSRF 规则拦截这些路径；本 starter 对 API 自行执行会话认证与 CSRF 校验。
+
+### K8s / Ingress 登录成功后立即 401
+
+浏览器收到 `login` 的 `csrf` JSON 不代表认证已保存。认证保存在响应头 `Set-Cookie: DBWV_AUTH=...`，下一次请求必须带上 `Cookie: DBWV_AUTH=...`。在浏览器开发者工具 Network 中检查：
+
+1. `login` **响应头**是否包含 `Set-Cookie`。如果没有，检查 Ingress、网关或代理是否过滤了该响应头。
+2. `Set-Cookie` 的 `Path` 是否为 `settings` 请求 URL 的路径前缀。例如公开接口为 `/gateway/db-web-view/api/settings`，但后端只看到 `/db-web-view` 并设置 `Path=/db-web-view`，浏览器就不会发送 Cookie。此时配置 `db-web-view.cookie-path: /gateway/db-web-view`。该值填写浏览器地址栏中的**公开页面路径**，去掉结尾斜杠，必须以 `/db-web-view` 结尾。所有 Pod 应配置相同值。不要填写 Pod 内部的 `contextPath`。
+3. 若 Cookie 带 `Secure`，公开页面必须通过 HTTPS 访问；若浏览器使用 HTTP 而代理发送了错误的 `X-Forwarded-Proto: https`，浏览器不会在后续 HTTP 请求发送该 Cookie。检查 Ingress 的 TLS 终止与转发头。`SameSite=Lax` 要求同站点使用；不要把页面嵌入跨站 iframe。
+4. 查看 Network 的 Cookies/Issues 中浏览器拒收原因。若 Cookie 已随 `settings` 请求发送但仍返回 401，再核对各 Pod 的 `jwt-secret`、`username`、`jwt-ttl-seconds` 是否一致，并确认网关没有过滤请求的 `Cookie` 头。
+
+例如公开访问地址为 `http://host/szqdzx-api/szhqdzx/db-web-view/`、应用内部的 `contextPath` 为 `/szhqdzx`，则应设置 `cookie-path: /szqdzx-api/szhqdzx/db-web-view`。即使页面和 `login` 都正常显示，只要响应中的 Cookie Path 少了 `/szqdzx-api`，后续 `settings`、`session` 就不会携带登录 Cookie。
 
 单数据源项目继续使用普通的 `spring.datasource.url`、`username`、`password` 即可。MyBatis-Plus 的 `mybatis-plus.*` 配置无需改动。只要 Spring 容器中已经注册了可连接的 `DataSource`，本 starter 就会从实际连接池发现数据库；它不会解析未激活 profile 的 YAML 配置。
 

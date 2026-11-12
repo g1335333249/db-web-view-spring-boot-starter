@@ -26,6 +26,7 @@ public class JwtAuthService {
     private final byte[] key;
     private final long ttlSeconds;
     private final String username;
+    private final String configuredCookiePath;
     private final ObjectMapper mapper = new ObjectMapper();
     private final SecureRandom random = new SecureRandom();
 
@@ -42,6 +43,7 @@ public class JwtAuthService {
             this.key = secret.getBytes(StandardCharsets.UTF_8);
         }
         this.username = properties.getUsername();
+        this.configuredCookiePath = validateCookiePath(properties.getCookiePath());
         this.ttlSeconds = Math.max(300, Math.min(7 * 24 * 3600, properties.getJwtTtlSeconds()));
     }
 
@@ -118,11 +120,19 @@ public class JwtAuthService {
     }
 
     private void writeCookie(HttpServletRequest request, HttpServletResponse response, String value, int maxAge) {
-        String path = request.getContextPath() + "/db-web-view";
+        String path = configuredCookiePath == null ? request.getContextPath() + "/db-web-view" : configuredCookiePath;
         boolean secure = request.isSecure() || "https".equalsIgnoreCase(request.getHeader("X-Forwarded-Proto"));
         String cookie = COOKIE_NAME + "=" + value + "; Path=" + path + "; Max-Age=" + maxAge
                 + "; HttpOnly; SameSite=Lax" + (secure ? "; Secure" : "");
         response.addHeader("Set-Cookie", cookie);
+    }
+
+    private String validateCookiePath(String path) {
+        if (path == null || path.isEmpty()) return null;
+        if (!path.startsWith("/") || path.endsWith("/") || !path.endsWith("/db-web-view")
+                || path.contains("//") || !path.matches("/[A-Za-z0-9_./~-]+"))
+            throw new IllegalStateException("db-web-view.cookie-path 必须是以 /db-web-view 结尾的公开绝对路径");
+        return path;
     }
 
     private String text(JsonNode node, String name) {

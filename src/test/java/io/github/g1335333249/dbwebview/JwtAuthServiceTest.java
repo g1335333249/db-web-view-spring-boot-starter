@@ -52,4 +52,16 @@ class JwtAuthServiceTest {
     @Test void secretMustBeSharedAndStrong() {
         assertThrows(IllegalStateException.class, () -> new JwtAuthService(properties("short")));
     }
+
+    @Test void publicCookiePathCanOverrideInternalContextPath() {
+        DbWebViewProperties config = properties("0123456789abcdefghijklmnopqrstuvwxyz-shared-key");
+        config.setCookiePath("/szqdzx-api/szhqdzx/db-web-view");
+        JwtAuthService jwt = new JwtAuthService(config);
+        MockHttpServletRequest login = new MockHttpServletRequest();
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        jwt.issue(login, response);
+        assertTrue(response.getHeader("Set-Cookie").contains("Path=/szqdzx-api/szhqdzx/db-web-view;"));
+        config.setCookiePath("/gateway/db-web-view; Secure");
+        assertThrows(IllegalStateException.class, () -> new JwtAuthService(config));
+    }
 }
