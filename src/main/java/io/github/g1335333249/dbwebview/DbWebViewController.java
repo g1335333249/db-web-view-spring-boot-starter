@@ -15,6 +15,8 @@ import java.sql.SQLException;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.List;
+import java.util.ArrayList;
 
 @RestController
 @RequestMapping("/db-web-view")
@@ -128,23 +130,35 @@ public class DbWebViewController {
                        @RequestParam(defaultValue = "false") boolean descending,
                        @RequestParam(required = false) String filters,
                        HttpServletResponse response) throws SQLException, java.io.IOException {
-        Map<String, String> checked = parseFilters(filters);
+        List<FilterCondition> checked = parseFilters(filters);
         response.setContentType("text/csv;charset=UTF-8");
         response.setHeader("Content-Disposition", "attachment; filename=table.csv");
         response.setHeader("Cache-Control", "no-store");
         service.writeCsv(response.getOutputStream(), source, namespace, table, checked, sort, descending);
     }
 
-    private Map<String, String> parseFilters(String raw) {
-        if (raw == null || raw.isEmpty()) return Collections.emptyMap();
+    private List<FilterCondition> parseFilters(String raw) {
+        if (raw == null || raw.isEmpty()) return Collections.emptyList();
         try {
             com.fasterxml.jackson.databind.JsonNode node = new com.fasterxml.jackson.databind.ObjectMapper().readTree(raw);
-            if (!node.isObject() || node.size() > 20) throw new IllegalArgumentException("筛选格式错误");
-            Map<String, String> result = new LinkedHashMap<>();
-            node.fields().forEachRemaining(entry -> {
-                if (!entry.getValue().isTextual()) throw new IllegalArgumentException("筛选值必须为文本");
-                result.put(entry.getKey(), entry.getValue().asText());
-            });
+            if (node.size() > 20) throw new IllegalArgumentException("筛选条件过多");
+            List<FilterCondition> result = new ArrayList<>();
+            if (node.isObject()) {
+                node.fields().forEachRemaining(entry -> {
+                    if (!entry.getValue().isTextual()) throw new IllegalArgumentException("筛选值必须为文本");
+                    result.add(new FilterCondition(entry.getKey(), "eq", entry.getValue().asText(), null));
+                });
+            } else if (node.isArray()) {
+                for (com.fasterxml.jackson.databind.JsonNode item : node) {
+                    if (!item.isObject() || !item.path("column").isTextual() || !item.path("operator").isTextual())
+                        throw new IllegalArgumentException("筛选格式错误");
+                    for (String key : new String[]{"value", "value2"})
+                        if (item.has(key) && !item.get(key).isTextual()) throw new IllegalArgumentException("筛选值必须为文本");
+                    result.add(new FilterCondition(item.get("column").asText(), item.get("operator").asText(),
+                            item.has("value") ? item.get("value").asText() : null,
+                            item.has("value2") ? item.get("value2").asText() : null));
+                }
+            } else throw new IllegalArgumentException("筛选格式错误");
             return result;
         } catch (java.io.IOException ex) { throw new IllegalArgumentException("筛选格式错误", ex); }
     }
@@ -176,7 +190,8 @@ public class DbWebViewController {
         auditStore.checkAvailable();
         long started = System.nanoTime();
         Map<String, Object> result;
-        try { result = sqlService.execute(request.source, request.sql); }
+        try { result = sqlService.execute(request.source, request.sql,
+                request.executionId == null ? java.util.UUID.randomUUID().toString() : request.executionId, false); }
         catch (SQLException | RuntimeException ex) {
             recordSql(request, http, null, auditError(ex), (System.nanoTime() - started) / 1_000_000);
             throw ex;
@@ -184,6 +199,29 @@ public class DbWebViewController {
         if (!recordSql(request, http, result, null, (System.nanoTime() - started) / 1_000_000))
             result.put("auditWarning", "操作已执行，但审计写入失败");
         return result;
+    }
+
+    @PostMapping("/api/sql/explain")
+    public Map<String, Object> explainSql(@RequestBody SqlRequest request, HttpServletRequest http) throws SQLException {
+        if (!sqlAvailable()) throw new IllegalArgumentException("SQL 控制台已关闭");
+        auditStore.checkAvailable();
+        long started = System.nanoTime();
+        Map<String, Object> result;
+        try { result = sqlService.execute(request.source, request.sql,
+                request.executionId == null ? java.util.UUID.randomUUID().toString() : request.executionId, true); }
+        catch (SQLException | RuntimeException ex) {
+            recordSql(request, http, null, auditError(ex), (System.nanoTime() - started) / 1_000_000);
+            throw ex;
+        }
+        if (!recordSql(request, http, result, null, (System.nanoTime() - started) / 1_000_000))
+            result.put("auditWarning", "操作已执行，但审计写入失败");
+        return result;
+    }
+
+    @PostMapping("/api/sql/cancel")
+    public Map<String, Object> cancelSql(@RequestBody SqlRequest request) throws SQLException {
+        if (!sqlAvailable()) throw new IllegalArgumentException("SQL 控制台已关闭");
+        return Collections.singletonMap("requested", sqlService.cancel(request.executionId));
     }
 
     @GetMapping("/api/sql/history")
@@ -301,6 +339,7 @@ public class DbWebViewController {
     public static class SqlRequest {
         public String source;
         public String sql;
+        public String executionId;
     }
 
     private static class TooManyRequestsException extends RuntimeException {

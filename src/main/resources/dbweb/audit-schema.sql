@@ -26,3 +26,8 @@ CREATE TABLE IF NOT EXISTS dbwv_login_failure (
     client_ip VARCHAR(64) NOT NULL
 );
 CREATE INDEX dbwv_login_failure_ip_time_idx ON dbwv_login_failure (client_ip, occurred_at);
+CREATE TABLE IF NOT EXISTS dbwv_sql_execution (
+    execution_id VARCHAR(36) PRIMARY KEY,
+    cancel_requested BOOLEAN NOT NULL,
+    expires_at BIGINT NOT NULL
+);

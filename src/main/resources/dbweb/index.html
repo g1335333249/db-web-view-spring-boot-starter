@@ -44,7 +44,8 @@
           <div class="toolbar"><button id="structure" disabled>表结构</button><button id="export" disabled>导出 CSV</button><button id="refresh" disabled>刷新</button><button id="add" class="primary" disabled>新增记录</button></div>
         </div>
         <div id="table-meta" class="table-meta"></div>
-        <div class="table-controls"><label>筛选字段 <select id="filter-column"></select></label><label>等于 <input id="filter-value" placeholder="输入精确值"></label><button id="apply-filter">筛选</button><button id="clear-filter">清除</button><label>排序 <select id="sort-column"></select></label><label><input id="descending" type="checkbox"> 降序</label></div>
+        <div class="table-controls"><button id="add-filter">添加条件</button><button id="apply-filter">筛选</button><button id="clear-filter">清除</button><label>排序 <select id="sort-column"></select></label><label><input id="descending" type="checkbox"> 降序</label></div>
+        <div id="filter-list" class="filter-list" aria-label="筛选条件"></div>
         <div id="structure-panel" class="structure-panel hidden"></div>
         <div class="grid-wrap"><table id="data-grid"><thead></thead><tbody></tbody></table><div id="empty" class="empty">选择一张表开始浏览</div></div>
         <footer class="pagination"><span id="page-info"></span><div><button id="prev" disabled>上一页</button><button id="next" disabled>下一页</button></div></footer>
@@ -54,7 +55,7 @@
           <p class="sql-hint">一次执行一条 SQL。支持查询及写入语句；写入和结构变更会立即作用于当前数据源。</p>
           <label for="sql-input" class="field-label">SQL 语句</label>
           <textarea id="sql-input" class="sql-input" spellcheck="false" placeholder="SELECT * FROM your_table LIMIT 20;"></textarea>
-          <div class="sql-actions"><span>Ctrl/⌘ + Enter 执行</span><button id="run-sql" class="primary">执行 SQL</button></div>
+          <div class="sql-actions"><span>Ctrl/⌘ + Enter 执行</span><button id="explain-sql">执行计划</button><button id="run-sql" class="primary">执行 SQL</button><button id="cancel-sql" disabled>取消执行</button><button id="export-sql" disabled>导出当前结果 CSV</button></div>
           <div id="sql-status" class="table-meta" role="status">输入 SQL 后点击执行</div>
           <details><summary>执行历史</summary><button id="refresh-history">刷新历史</button><div id="sql-history" class="history-list"></div></details>
           <div class="grid-wrap"><table id="sql-grid"><thead></thead><tbody></tbody></table><div id="sql-empty" class="empty">执行结果将显示在这里</div></div>

@@ -28,8 +28,8 @@ public class DbWebViewAutoConfiguration {
     }
 
     @Bean
-    public SqlConsoleService dbWebViewSqlConsoleService(DataSourceRegistry registry, DbWebViewProperties properties) {
-        return new SqlConsoleService(registry, properties);
+    public SqlConsoleService dbWebViewSqlConsoleService(DataSourceRegistry registry, DbWebViewProperties properties, AuditStore auditStore) {
+        return new SqlConsoleService(registry, properties, auditStore);
     }
 
     @Bean

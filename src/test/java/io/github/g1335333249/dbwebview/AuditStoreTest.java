@@ -38,5 +38,12 @@ class AuditStoreTest {
         assertFalse(podB.tooManyFailures("192.0.2.10"));
         podA.revoke("example-jti", Instant.now().plusSeconds(3600).getEpochSecond());
         assertTrue(podB.revoked("example-jti"));
+        String executionId = java.util.UUID.randomUUID().toString();
+        podA.beginSqlExecution(executionId);
+        assertFalse(podA.sqlCancellationRequested(executionId));
+        assertTrue(podB.requestSqlCancellation(executionId));
+        assertTrue(podA.sqlCancellationRequested(executionId));
+        podA.finishSqlExecution(executionId);
+        assertFalse(podB.requestSqlCancellation(executionId));
     }
 }

@@ -29,5 +29,11 @@ class SqlConsoleServiceTest {
         assertEquals("resultSet", result.get("kind"));
         assertEquals(1, result.get("rowCount"));
         assertEquals(true, result.get("truncated"));
+        Map<String, Object> plan = service.explain("limited", "SELECT ID FROM T WHERE ID=1");
+        assertEquals("resultSet", plan.get("kind"));
+        assertFalse(((java.util.List<?>) plan.get("rows")).isEmpty());
+        assertThrows(IllegalArgumentException.class, () -> service.explain("limited", "DELETE FROM T"));
+        assertFalse(service.cancel(java.util.UUID.randomUUID().toString()));
+        service.shutdown();
     }
 }

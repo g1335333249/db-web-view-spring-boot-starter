@@ -57,6 +57,11 @@ public class DatabaseService {
 
     public Map<String, Object> rows(String source, String namespace, String tableName, int page, int size,
                                     Map<String, String> filters, String sort, boolean descending, String cursor) throws SQLException {
+        return rows(source, namespace, tableName, page, size, legacyFilters(filters), sort, descending, cursor);
+    }
+
+    public Map<String, Object> rows(String source, String namespace, String tableName, int page, int size,
+                                    List<FilterCondition> filters, String sort, boolean descending, String cursor) throws SQLException {
         if (page < 0) throw new IllegalArgumentException("页码不能小于 0");
         int max = Math.max(1, Math.min(1000, properties.getMaxPageSize()));
         int actualSize = Math.max(1, Math.min(size <= 0 ? properties.getPageSize() : size, max));
@@ -65,19 +70,43 @@ public class DatabaseService {
             Table table = resolve(connection, namespace, tableName);
             List<Map<String, Object>> records = new ArrayList<>();
             StringBuilder sql = new StringBuilder("SELECT * FROM ").append(table.qualifiedName);
-            Map<String, String> checkedFilters = filters == null ? Collections.emptyMap() : filters;
+            List<FilterCondition> checkedFilters = filters == null ? Collections.emptyList() : filters;
             if (checkedFilters.size() > 20) throw new IllegalArgumentException("筛选字段过多");
             boolean keyset = table.primaryKeys.size() == 1 && (sort == null || sort.isEmpty()) && !descending;
             if (cursor != null && !cursor.isEmpty() && !keyset) throw new IllegalArgumentException("此排序不支持游标翻页");
             List<String> termsList = new ArrayList<>();
-            if (!checkedFilters.isEmpty()) {
-                StringJoiner terms = new StringJoiner(" AND ");
-                for (String column : checkedFilters.keySet()) {
-                    Column definition = table.columns.get(column);
-                    if (definition == null || definition.binary) throw new IllegalArgumentException("不可筛选字段: " + column);
-                    terms.add(quote(connection, column) + " = ?");
+            List<Object> filterValues = new ArrayList<>();
+            for (FilterCondition filter : checkedFilters) {
+                if (filter == null || filter.column == null) throw new IllegalArgumentException("筛选格式错误");
+                Column definition = table.columns.get(filter.column);
+                if (definition == null || definition.binary) throw new IllegalArgumentException("不可筛选字段: " + filter.column);
+                String name = quote(connection, filter.column);
+                String operator = filter.operator == null ? "eq" : filter.operator;
+                switch (operator) {
+                    case "eq": case "ne": case "gt": case "gte": case "lt": case "lte":
+                        if (filter.value == null) throw new IllegalArgumentException("缺少筛选值");
+                        String comparison = "eq".equals(operator) ? "=" : "ne".equals(operator) ? "<>" :
+                                "gt".equals(operator) ? ">" : "gte".equals(operator) ? ">=" : "lt".equals(operator) ? "<" : "<=";
+                        termsList.add(name + " " + comparison + " ?");
+                        filterValues.add(convert(filter.value, definition.jdbcType));
+                        break;
+                    case "contains":
+                        if (filter.value == null) throw new IllegalArgumentException("缺少筛选值");
+                        if (!isTextType(definition.jdbcType)) throw new IllegalArgumentException("包含操作只支持文本字段");
+                        termsList.add(name + " LIKE ? ESCAPE '!'");
+                        filterValues.add("%" + filter.value.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%");
+                        break;
+                    case "between":
+                        if (filter.value == null || filter.value2 == null) throw new IllegalArgumentException("范围筛选需要两个值");
+                        termsList.add(name + " BETWEEN ? AND ?");
+                        filterValues.add(convert(filter.value, definition.jdbcType));
+                        filterValues.add(convert(filter.value2, definition.jdbcType));
+                        break;
+                    case "isNull": case "isNotNull":
+                        termsList.add(name + ("isNull".equals(operator) ? " IS NULL" : " IS NOT NULL"));
+                        break;
+                    default: throw new IllegalArgumentException("不支持的筛选操作: " + operator);
                 }
-                termsList.add(terms.toString());
             }
             if (cursor != null && !cursor.isEmpty()) {
                 if (cursor.length() > 1024) throw new IllegalArgumentException("游标过长");
@@ -94,8 +123,7 @@ public class DatabaseService {
             if (!keyset || (page > 0 && (cursor == null || cursor.isEmpty()))) sql.append(" OFFSET ?");
             try (PreparedStatement statement = connection.prepareStatement(sql.toString())) {
                 int parameter = 1;
-                for (Map.Entry<String, String> entry : checkedFilters.entrySet())
-                    statement.setObject(parameter++, convert(entry.getValue(), table.columns.get(entry.getKey()).jdbcType));
+                for (Object value : filterValues) statement.setObject(parameter++, value);
                 if (cursor != null && !cursor.isEmpty()) {
                     String key = table.primaryKeys.get(0);
                     String decoded;
@@ -225,6 +253,11 @@ public class DatabaseService {
 
     public void writeCsv(OutputStream output, String source, String namespace, String tableName,
                          Map<String, String> filters, String sort, boolean descending) throws SQLException, IOException {
+        writeCsv(output, source, namespace, tableName, legacyFilters(filters), sort, descending);
+    }
+
+    public void writeCsv(OutputStream output, String source, String namespace, String tableName,
+                         List<FilterCondition> filters, String sort, boolean descending) throws SQLException, IOException {
         int limit = Math.max(1, Math.min(properties.getExportMaxRows(), 100000));
         Writer writer = new OutputStreamWriter(output, StandardCharsets.UTF_8);
         int page = 0, count = 0;
@@ -253,6 +286,17 @@ public class DatabaseService {
             cursor = (String) result.get("nextCursor");
         }
         writer.flush();
+    }
+
+    private List<FilterCondition> legacyFilters(Map<String, String> filters) {
+        List<FilterCondition> result = new ArrayList<>();
+        if (filters != null) filters.forEach((column, value) -> result.add(new FilterCondition(column, "eq", value, null)));
+        return result;
+    }
+
+    private boolean isTextType(int type) {
+        return type == Types.CHAR || type == Types.VARCHAR || type == Types.LONGVARCHAR
+                || type == Types.NCHAR || type == Types.NVARCHAR || type == Types.LONGNVARCHAR;
     }
 
     private String csvCell(Object value) {

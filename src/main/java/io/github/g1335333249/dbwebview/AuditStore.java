@@ -52,12 +52,14 @@ public class AuditStore {
                     statement.execute("CREATE TABLE IF NOT EXISTS dbwv_audit_event (event_id VARCHAR(36) PRIMARY KEY, occurred_at BIGINT NOT NULL, action_name VARCHAR(32) NOT NULL, source_name VARCHAR(128), namespace_name VARCHAR(128), table_name VARCHAR(128), client_ip VARCHAR(64), result_kind VARCHAR(32), affected BIGINT, row_count BIGINT, elapsed_ms BIGINT, error_text VARCHAR(1000), sql_text TEXT)");
                     statement.execute("CREATE TABLE IF NOT EXISTS dbwv_token_revocation (jti VARCHAR(43) PRIMARY KEY, expires_at BIGINT NOT NULL)");
                     statement.execute("CREATE TABLE IF NOT EXISTS dbwv_login_failure (event_id VARCHAR(36) PRIMARY KEY, occurred_at BIGINT NOT NULL, client_ip VARCHAR(64) NOT NULL)");
+                    statement.execute("CREATE TABLE IF NOT EXISTS dbwv_sql_execution (execution_id VARCHAR(36) PRIMARY KEY, cancel_requested BOOLEAN NOT NULL, expires_at BIGINT NOT NULL)");
                 }
             }
             try (Statement statement = connection.createStatement()) {
                 statement.executeQuery("SELECT 1 FROM dbwv_audit_event WHERE 1=0").close();
                 statement.executeQuery("SELECT 1 FROM dbwv_token_revocation WHERE 1=0").close();
                 statement.executeQuery("SELECT 1 FROM dbwv_login_failure WHERE 1=0").close();
+                statement.executeQuery("SELECT 1 FROM dbwv_sql_execution WHERE 1=0").close();
             } catch (SQLException ex) {
                 throw new SQLException("审计表未准备好，请执行 dbweb/audit-schema.sql 或设置 db-web-view.audit-auto-create=true", ex);
             }
@@ -207,6 +209,48 @@ public class AuditStore {
         }
     }
 
+    public void beginSqlExecution(String id) throws SQLException {
+        if (!shared()) return;
+        initialize();
+        maybeCleanup();
+        try (Connection connection = dataSource().getConnection(); PreparedStatement statement = connection.prepareStatement(
+                "INSERT INTO dbwv_sql_execution (execution_id,cancel_requested,expires_at) VALUES (?,false,?)")) {
+            statement.setString(1, id);
+            statement.setLong(2, Instant.now().plusSeconds(3600).toEpochMilli());
+            statement.executeUpdate();
+        }
+    }
+
+    public boolean requestSqlCancellation(String id) throws SQLException {
+        if (!shared()) return false;
+        initialize();
+        try (Connection connection = dataSource().getConnection(); PreparedStatement statement = connection.prepareStatement(
+                "UPDATE dbwv_sql_execution SET cancel_requested=true WHERE execution_id=? AND expires_at>?")) {
+            statement.setString(1, id);
+            statement.setLong(2, Instant.now().toEpochMilli());
+            return statement.executeUpdate() > 0;
+        }
+    }
+
+    public boolean sqlCancellationRequested(String id) throws SQLException {
+        if (!shared()) return false;
+        initialize();
+        try (Connection connection = dataSource().getConnection(); PreparedStatement statement = connection.prepareStatement(
+                "SELECT cancel_requested FROM dbwv_sql_execution WHERE execution_id=?")) {
+            statement.setString(1, id);
+            try (ResultSet rs = statement.executeQuery()) { return rs.next() && rs.getBoolean(1); }
+        }
+    }
+
+    public void finishSqlExecution(String id) throws SQLException {
+        if (!shared()) return;
+        try (Connection connection = dataSource().getConnection(); PreparedStatement statement = connection.prepareStatement(
+                "DELETE FROM dbwv_sql_execution WHERE execution_id=?")) {
+            statement.setString(1, id);
+            statement.executeUpdate();
+        }
+    }
+
     private void maybeCleanup() {
         long now = Instant.now().getEpochSecond();
         long previous = lastCleanup.get();
@@ -217,6 +261,7 @@ public class AuditStore {
             cleanup(connection, "DELETE FROM dbwv_token_revocation WHERE expires_at<?", Instant.ofEpochSecond(now));
             cleanup(connection, "DELETE FROM dbwv_login_failure WHERE occurred_at<?",
                     Instant.ofEpochSecond(now - Math.max(60, properties.getLoginWindowSeconds())));
+            cleanup(connection, "DELETE FROM dbwv_sql_execution WHERE expires_at<?", Instant.ofEpochSecond(now));
         } catch (SQLException ex) { log.warn("DB Web View audit cleanup failed", ex); }
     }
 

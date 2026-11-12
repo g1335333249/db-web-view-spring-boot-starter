@@ -6,13 +6,18 @@
 .sql-hint{font-size:12px;color:#667085;margin:16px 0}
 .sql-input{display:block;width:100%;min-height:155px;resize:vertical;border:1px solid #d7dce5;border-radius:9px;padding:13px 15px;background:#fff;color:#1f2937;font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;outline:none}
 .sql-input:focus{border-color:#2463eb;box-shadow:0 0 0 3px #2463eb1a}
-.sql-actions{display:flex;align-items:center;justify-content:space-between;margin-top:11px;color:#98a2b3;font-size:12px}
+.sql-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px;margin-top:11px;color:#98a2b3;font-size:12px}
+.sql-actions span{margin-right:auto}
 .sql-actions button{min-width:105px}
 #sql-panel .grid-wrap{min-height:150px}
 .table-controls { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:12px 0; }
 .table-controls label { display:flex; align-items:center; gap:6px; font-size:13px; color:#526078; }
 .table-controls input, .table-controls select { max-width:170px; padding:7px; border:1px solid #dce2ec; border-radius:6px; }
 .table-controls input[type=checkbox] { width:auto; }
+.filter-list{display:flex;flex-direction:column;gap:6px;margin-bottom:10px;max-height:170px;overflow:auto}
+.filter-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.filter-row select,.filter-row input{min-width:90px;max-width:170px;padding:7px;border:1px solid #dce2ec;border-radius:6px}
+.filter-row [hidden]{display:none}
 .structure-panel { margin:14px 0; max-height:300px; overflow:auto; border:1px solid #dce2ec; border-radius:8px; padding:12px; }
 .structure-panel h3 { margin:10px 0; font-size:15px; }
 .structure-panel table { border-collapse:collapse; width:100%; }

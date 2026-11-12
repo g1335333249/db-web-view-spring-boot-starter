@@ -201,6 +201,51 @@ class DbWebViewIntegrationTest {
         assertEquals(1, csv.split("name-205", -1).length - 1);
     }
 
+    @Test
+    void multiConditionFilterAndCsvUseSameRows() throws Exception {
+        jdbc.update("INSERT INTO ITEMS (ID, NAME) VALUES (?, ?)", 2, "fir%st");
+        jdbc.update("INSERT INTO ITEMS (ID, NAME) VALUES (?, ?)", 3, "second");
+        java.util.List<FilterCondition> filters = java.util.Arrays.asList(
+                new FilterCondition("NAME", "contains", "%", null),
+                new FilterCondition("ID", "between", "2", "3"));
+        java.util.Map<String, Object> result = databaseService.rows("dataSource", "PUBLIC", "ITEMS", 0, 20, filters, null, false, null);
+        assertEquals(1, ((java.util.List<?>) result.get("rows")).size());
+        java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+        databaseService.writeCsv(output, "dataSource", "PUBLIC", "ITEMS", filters, null, false);
+        assertTrue(output.toString("UTF-8").contains("fir%st"));
+        assertFalse(output.toString("UTF-8").contains("second"));
+        jdbc.update("INSERT INTO ITEMS (ID, NAME) VALUES (?, ?)", 4, null);
+        java.util.Map<String, Object> nullRows = databaseService.rows("dataSource", "PUBLIC", "ITEMS", 0, 20,
+                java.util.Collections.singletonList(new FilterCondition("NAME", "isNull", null, null)), null, false, null);
+        assertEquals(1, ((java.util.List<?>) nullRows.get("rows")).size());
+        assertThrows(IllegalArgumentException.class, () -> databaseService.rows("dataSource", "PUBLIC", "ITEMS", 0, 20,
+                java.util.Collections.singletonList(new FilterCondition("ID;DROP TABLE ITEMS", "eq", "1", null)), null, false, null));
+    }
+
+    @Test
+    void filterAndExplainEndpointsAcceptNewRequests() throws Exception {
+        MvcResult login = mvc.perform(post("/db-web-view/api/login").contentType("application/json")
+                .content("{\"username\":\"admin\",\"password\":\"secret\"}"))
+                .andExpect(status().isOk()).andReturn();
+        Cookie cookie = cookie(login);
+        String csrf = mapper.readTree(login.getResponse().getContentAsString()).get("csrf").asText();
+        String source = mapper.readTree(mvc.perform(get("/db-web-view/api/sources").cookie(cookie))
+                .andReturn().getResponse().getContentAsString()).get("sources").get(0).asText();
+        JsonNode filtered = mapper.readTree(mvc.perform(get("/db-web-view/api/rows").cookie(cookie)
+                .param("source", source).param("namespace", "PUBLIC").param("table", "ITEMS")
+                .param("filters", "[{\"column\":\"NAME\",\"operator\":\"contains\",\"value\":\"fir\"}]")
+                .param("page", "0"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        assertEquals(1, filtered.get("rows").size());
+        java.util.Map<String, String> explain = new java.util.LinkedHashMap<>();
+        explain.put("source", source);
+        explain.put("sql", "SELECT * FROM ITEMS");
+        mvc.perform(post("/db-web-view/api/sql/explain").cookie(cookie)
+                .header("X-DB-Web-View-CSRF", csrf).contentType("application/json")
+                .content(mapper.writeValueAsString(explain)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.kind").value("resultSet"));
+    }
+
     private Cookie cookie(MvcResult login) {
         String header = login.getResponse().getHeader("Set-Cookie");
         assertNotNull(header);
