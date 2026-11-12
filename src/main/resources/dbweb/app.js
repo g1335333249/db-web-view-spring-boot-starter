@@ -260,5 +260,10 @@
   $('tab-sql').onclick = () => switchView('sql');
   $('run-sql').onclick = runSql;
   $('sql-input').onkeydown = event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); runSql(); } };
+  window.addEventListener('beforeunload', event => {
+    if (!state.csrf) return;
+    event.preventDefault();
+    event.returnValue = true;
+  });
   start();
 })();
